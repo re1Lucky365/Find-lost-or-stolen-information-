@@ -1,3 +1,32 @@
+re Robert Edward Evans {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "pipeline_name": "Multi-Asset-Wealth-Engine",
+  "version": "1.0.0",
+  "allocations": {
+    "equity_target_percent": 60,
+    "real_estate_target_percent": 40,
+    "rebalance_drift_threshold_percent": 5.0
+  },
+  "strategies": {
+    "stocks": {
+      "dca_cadence": "monthly",
+      "core_etf": "VOO",
+      "dividend_reinvestment": "automatic",
+      "tax_loss_harvesting": true
+    },
+    "real_estate": {
+      "strategy": "BRRRR",
+      "target_cash_on_cash_return_min": 8.0,
+      "max_loan_to_value_ratio": 80.0,
+      "reserve_allocation_percent": 10.0
+    }
+  },
+  "automation_triggers": {
+    "monthly_deposit_execution": "0 0 1 * *",
+    "quarterly_portfolio_audit": "0 0 1 */3 *"
+  }
+}
+
 # Find-lost-or-stolen-information-
 rebuild kit decrypting All of my accounts 
 requirements.txt# 1. Install required dependencies
