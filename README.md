@@ -1,3 +1,3476 @@
+commit.gpgsigncd ~/master-hub
+git init
+git branch -M main
+git config --global commit.gpgsign true
+git add .
+git commit -S -m "feat: complete master-hub zero-trust repository structure and orchestration pipeline"
+git remote add origin https://github.com/re1Lucky365/master-hub.git
+git push -u origin main --tags
+name: Master Ecosystem Lifecycle Sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  lifecycle-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Master Orchestrator
+        run: |
+          python3 scripts/master_orchestrator.py
+        env:
+          IPFS_API_URL: ${{ secrets.IPFS_API_URL }}
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+          WEB3_STORAGE_TOKEN: ${{ secrets.WEB3_STORAGE_TOKEN }}
+
+      - name: Commit and Push Updated Manifests & Backups
+        run: |
+          git config --global user.name "re1Lucky365-Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add evidence_manifest.json unified_backup_manifest.json data/ backups/
+          git status
+          git diff-index --quiet HEAD || git commit -m "chore(lifecycle): automated daily ecosystem state synchronization [skip ci]"
+          git push origin main
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: app/main.py
+# Description: FastAPI service exposing the ChromaDB investigation vector 
+#              database with mandatory GPG signature verification.
+# ==============================================================================
+
+from fastapi import FastAPI, HTTPException, Header
+from pydantic import BaseModel
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+import subprocess
+import tempfile
+from pathlib import Path
+
+app = FastAPI(
+    title="Zero-Trust Investigative RAG API",
+    description="Secure endpoint enforcing GPG cryptographic signature validation for vector search queries.",
+    version="1.0.0"
+)
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DB_DIR = WORKSPACE_DIR / "local_vector_db"
+COLLECTION_NAME = "investigative_knowledge_base"
+
+embedding_fn = SentenceTransformerEmbeddingFunction(
+    model_name="all-MiniLM-L6-v2",
+    device="cpu"
+)
+client = chromadb.PersistentClient(path=str(DB_DIR))
+collection = client.get_or_create_collection(
+    name=COLLECTION_NAME,
+    embedding_function=embedding_fn
+)
+
+class QueryRequest(BaseModel):
+    query_text: str
+    n_results: int = 3
+
+def verify_gpg_signature(payload: str, signature_armor: str) -> bool:
+    if not signature_armor:
+        return False
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sig_path = Path(tmpdir) / "signature.asc"
+            data_path = Path(tmpdir) / "data.txt"
+            
+            sig_path.write_text(signature_armor, encoding="utf-8")
+            data_path.write_text(payload, encoding="utf-8")
+            
+            result = subprocess.run(
+                ["gpg", "--batch", "--status-fd", "1", "--verify", str(sig_path), str(data_path)],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            return "GOODSIG" in result.stdout
+    except Exception as e:
+        print(f"[!] GPG verification error: {e}")
+        return False
+
+@app.post("/query")
+async def query_knowledge_base(
+    payload: QueryRequest,
+    x_gpg_signature: str = Header(..., description="ASCII-armored detached GPG signature of the query text")
+):
+    if not verify_gpg_signature(payload.query_text, x_gpg_signature):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication failed: Invalid or missing GPG signature for query payload."
+        )
+
+    try:
+        search_results = collection.query(
+            query_texts=[payload.query_text],
+            n_results=payload.n_results
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vector database query error: {str(e)}")
+
+    return {
+        "status": "success",
+        "verified_signer": "GPG Cryptographic Validation Passed",
+        "query": payload.query_text,
+        "results": search_results
+    }
+orchestrator.py#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/index_investigations.py
+# Description: Indexes local investigation text documents into a persistent 
+#              ChromaDB vector database using sentence-transformers.
+# ==============================================================================
+
+import os
+from pathlib import Path
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DOCS_DIR = WORKSPACE_DIR / "investigations"
+DB_DIR = WORKSPACE_DIR / "local_vector_db"
+COLLECTION_NAME = "investigative_knowledge_base"
+
+def initialize_vector_store():
+    print(f"[*] Initializing persistent ChromaDB client at: {DB_DIR}")
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    
+    embedding_fn = SentenceTransformerEmbeddingFunction(
+        model_name="all-MiniLM-L6-v2",
+        device="cpu"
+    )
+    
+    client = chromadb.PersistentClient(path=str(DB_DIR))
+    collection = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=embedding_fn
+    )
+    return collection
+
+def ingest_documents(collection):
+    if not DOCS_DIR.exists():
+        DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        return
+
+    text_files = list(DOCS_DIR.glob("*.txt"))
+    if not text_files:
+        return
+
+    documents = []
+    metadatas = []
+    ids = []
+
+    for idx, file_path in enumerate(text_files):
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            doc_id = f"doc_{idx}_{file_path.stem}"
+            documents.append(content)
+            metadatas.append({"filename": file_path.name, "path": str(file_path)})
+            ids.append(doc_id)
+        except Exception as e:
+            print(f"[-] Error reading {file_path.name}: {e}")
+
+    if documents:
+        collection.upsert(
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
+        print(f"[+] Successfully indexed {len(documents)} documents into collection '{COLLECTION_NAME}'.")
+
+def main():
+    collection = initialize_vector_store()
+    ingest_documents(collection)
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust lifecycle pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG key...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned CID: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned CID: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded CID: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+web3.storagefastapi>=0.100.0
+uvicorn>=0.22.0
+chromadb>=0.4.0
+sentence-transformers>=2.2.2
+requests>=2.31.0
+pytest>=7.4.0
+pydantic>=2.0.0
+# Master-Hub: Zero-Trust Evidence & Oversight Archival System
+
+`master-hub` is an open-source, cryptographically verified pipeline designed to ingest public oversight feeds, execute local Retrieval-Augmented Generation (RAG) vector indexing, compress records using high-ratio Zstandard algorithms, sign manifests with GPG, and mirror archives across decentralized networks (IPFS, Pinata, and web3.storage / Filecoin).
+
+## Key Features
+* **Cryptographic Immutability:** SHA-256 file hashing and GPG detached signature manifests.
+* **Local AI Indexing:** Persistent vector storage using ChromaDB and sentence-transformers for secure semantic queries.
+* **Decentralized Redundancy:** Simultaneous multi-node pinning across local IPFS daemons, Pinata Cloud, and web3.storage.
+* **Automated CI/CD:** Hands-free execution via GitHub Actions and systemd timers.
+master-hub/
+├── .github/
+│   └── workflows/
+│       └── secure-pipeline.yml
+├── app/
+│   └── main.py
+├── scripts/
+│   ├── master_orchestrator.py
+│   ├── index_investigations.py
+│   └── fetch_stock_act_disclosures.py
+├── investigations/
+│   └── report_sample.txt
+├── .gitignore
+├── requirements.txt
+└── README.md
+secure-pipeline.ymlquery.txt.ascecho -n "financial disclosures and compliance records" > query.txt
+gpg --armor --detach-sign query.txt
+SIGNATURE=$(cat query.txt.asc | awk '{printf "%s\\n", $0}')
+
+curl -X POST "http://127.0.0.1:8000/query" \
+     -H "Content-Type: application/json" \
+     -H "X-GPG-Signature: $(cat query.txt.asc)" \
+     -d '{"query_text": "financial disclosures and compliance records", "n_results": 2}'
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: app/main.py
+# Description: FastAPI service exposing the ChromaDB investigation vector 
+#              database with mandatory GPG signature verification.
+# ==============================================================================
+
+from fastapi import FastAPI, HTTPException, Header
+from pydantic import BaseModel
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+import subprocess
+import tempfile
+from pathlib import Path
+
+app = FastAPI(
+    title="Zero-Trust Investigative RAG API",
+    description="Secure endpoint enforcing GPG cryptographic signature validation for vector search queries.",
+    version="1.0.0"
+)
+
+# Workspace & Database Paths
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DB_DIR = WORKSPACE_DIR / "local_vector_db"
+COLLECTION_NAME = "investigative_knowledge_base"
+
+# Initialize ChromaDB persistent client and local embedding function
+embedding_fn = SentenceTransformerEmbeddingFunction(
+    model_name="all-MiniLM-L6-v2",
+    device="cpu"
+)
+client = chromadb.PersistentClient(path=str(DB_DIR))
+collection = client.get_or_create_collection(
+    name=COLLECTION_NAME,
+    embedding_function=embedding_fn
+)
+
+class QueryRequest(BaseModel):
+    query_text: str
+    n_results: int = 3
+
+def verify_gpg_signature(payload: str, signature_armor: str) -> bool:
+    """Verifies an ASCII-armored detached GPG signature against a text payload."""
+    if not signature_armor:
+        return False
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sig_path = Path(tmpdir) / "signature.asc"
+            data_path = Path(tmpdir) / "data.txt"
+            
+            sig_path.write_text(signature_armor, encoding="utf-8")
+            data_path.write_text(payload, encoding="utf-8")
+            
+            result = subprocess.run(
+                ["gpg", "--batch", "--status-fd", "1", "--verify", str(sig_path), str(data_path)],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            return "GOODSIG" in result.stdout
+    except Exception as e:
+        print(f"[!] GPG verification error: {e}")
+        return False
+
+@app.post("/query")
+async def query_knowledge_base(
+    payload: QueryRequest,
+    x_gpg_signature: str = Header(..., description="ASCII-armored detached GPG signature of the query text")
+):
+    """
+    Queries the local ChromaDB vector collection after validating 
+    that the request is cryptographically signed by an authorized GPG key.
+    """
+    # 1. Enforce GPG Verification
+    if not verify_gpg_signature(payload.query_text, x_gpg_signature):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication failed: Invalid or missing GPG signature for query payload."
+        )
+
+    # 2. Perform Semantic Vector Search
+    try:
+        search_results = collection.query(
+            query_texts=[payload.query_text],
+            n_results=payload.n_results
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vector database query error: {str(e)}")
+
+    return {
+        "status": "success",
+        "verified_signer": "GPG Cryptographic Validation Passed",
+        "query": payload.query_text,
+        "results": search_results
+    }
+python3 scripts/index_investigations.py
+mkdir -p investigations
+echo "U.S. House Periodic Transaction Reports indicate structured filings..." > investigations/report_sample.txt
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/index_investigations.py
+# Description: Indexes local investigation text documents into a persistent 
+#              ChromaDB vector database using sentence-transformers.
+# ==============================================================================
+
+import os
+from pathlib import Path
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+# Path Configuration
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DOCS_DIR = WORKSPACE_DIR / "investigations"
+DB_DIR = WORKSPACE_DIR / "local_vector_db"
+COLLECTION_NAME = "investigative_knowledge_base"
+
+def initialize_vector_store():
+    """Initializes persistent ChromaDB client with a local Sentence Transformer model."""
+    print(f"[*] Initializing persistent ChromaDB client at: {DB_DIR}")
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Configure the local embedding function using sentence-transformers
+    embedding_fn = SentenceTransformerEmbeddingFunction(
+        model_name="all-MiniLM-L6-v2",
+        device="cpu"  # Change to "cuda" if utilizing an NVIDIA GPU
+    )
+    
+    client = chromadb.PersistentClient(path=str(DB_DIR))
+    
+    # Get or create collection with the custom embedding function
+    collection = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=embedding_fn
+    )
+    return collection
+
+def ingest_documents(collection):
+    """Scans the local investigations directory and indexes text documents."""
+    if not DOCS_DIR.exists():
+        print(f"[!] Investigations directory not found: {DOCS_DIR}. Creating empty directory.")
+        DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        return
+
+    text_files = list(DOCS_DIR.glob("*.txt"))
+    if not text_files:
+        print(f"[!] No .txt files found in {DOCS_DIR} to index.")
+        return
+
+    documents = []
+    metadatas = []
+    ids = []
+
+    for idx, file_path in enumerate(text_files):
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            doc_id = f"doc_{idx}_{file_path.stem}"
+            
+            documents.append(content)
+            metadatas.append({"filename": file_path.name, "path": str(file_path)})
+            ids.append(doc_id)
+            print(f"[*] Loaded document: {file_path.name}")
+        except Exception as e:
+            print(f"[-] Error reading {file_path.name}: {e}")
+
+    if documents:
+        # Upsert documents (ChromaDB automatically generates embeddings via the embedding function)
+        collection.upsert(
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
+        print(f"[+] Successfully indexed {len(documents)} documents into collection '{COLLECTION_NAME}'.")
+
+def query_knowledge_base(collection, search_query: str, n_results: int = 3):
+    """Performs a semantic similarity search across the indexed documents."""
+    print(f"\n[*] Executing semantic query: '{search_query}'")
+    results = collection.query(
+        query_texts=[search_query],
+        n_results=n_results
+    )
+    
+    print("\n--- Search Results ---")
+    for i, (doc, meta, dist) in enumerate(zip(results['documents'][0], results['metadatas'][0], results['distances'][0])):
+        print(f"\nResult {i+1} [Distance/Score: {dist:.4f}]:")
+        print(f"  Source File: {meta.get('filename')}")
+        print(f"  Snippet: {doc[:250]}...")
+
+def main():
+    collection = initialize_vector_store()
+    ingest_documents(collection)
+    
+    # Example semantic query test
+    sample_query = "financial disclosures and compliance records"
+    query_knowledge_base(collection, sample_query, n_results=2)
+
+if __name__ == "__main__":
+    main()
+pip install chromadb sentence-transformers
+To fully automate and deploy your complete zero-trust repository ecosystem (master-hub), everything is unified below into a single, production-ready code structure and automated execution sequence.
+Complete Repository Blueprint (master-hub/)
+master-hub/
+├── .github/
+│   └── workflows/
+│       └── secure-pipeline.yml
+├── app/
+│   └── main.py
+├── scripts/
+│   ├── master_orchestrator.py
+│   └── fetch_stock_act_disclosures.py
+├── requirements.txt
+└── README.md
+
+1. Master Orchestrator Code (scripts/master_orchestrator.py)
+This script runs the entire sequence automatically: generating SHA-256 manifests, signing them with GPG, packing high-ratio Zstandard archives, and synchronizing across decentralized nodes.
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust ecosystem lifecycle pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG key...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned CID: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned CID: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded CID: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+
+2. GitHub Actions CI/CD Workflow (.github/workflows/secure-pipeline.yml)
+name: Master Ecosystem Lifecycle Sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  lifecycle-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests chromadb
+
+      - name: Run Master Orchestrator
+        run: |
+          python3 scripts/master_orchestrator.py
+        env:
+          IPFS_API_URL: ${{ secrets.IPFS_API_URL }}
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+          WEB3_STORAGE_TOKEN: ${{ secrets.WEB3_STORAGE_TOKEN }}
+
+      - name: Commit and Push Updated Manifests & Backups
+        run: |
+          git config --global user.name "re1Lucky365-Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add evidence_manifest.json unified_backup_manifest.json data/ backups/
+          git status
+          git diff-index --quiet HEAD || git commit -m "chore(lifecycle): automated daily ecosystem state synchronization [skip ci]"
+          git push origin main
+
+Deployment & Synchronization Commands
+Execute these terminal commands to initialize, sign, and sync the repository with GitHub (re1Lucky365):
+cd ~/master-hub
+git init
+git branch -M main
+git config --global commit.gpgsign true
+git add .
+git commit -S -m "feat: establish complete repository system and lifecycle pipeline"
+git remote add origin https://github.com/re1Lucky365/master-hub.git
+git push -u origin main --tags
+
+cd ~/master-hub
+git init
+git branch -M main
+git config --global commit.gpgsign true
+git add .
+git commit -S -m "feat: establish complete repository system and lifecycle pipeline"
+git remote add origin https://github.com/re1Lucky365/master-hub.git
+git push -u origin main --tags
+name: Master Ecosystem Lifecycle Sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  lifecycle-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests chromadb
+
+      - name: Run Master Orchestrator
+        run: |
+          python3 scripts/master_orchestrator.py
+        env:
+          IPFS_API_URL: ${{ secrets.IPFS_API_URL }}
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+          WEB3_STORAGE_TOKEN: ${{ secrets.WEB3_STORAGE_TOKEN }}
+
+      - name: Commit and Push Updated Manifests & Backups
+        run: |
+          git config --global user.name "re1Lucky365-Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add evidence_manifest.json unified_backup_manifest.json data/ backups/
+          git status
+          git diff-index --quiet HEAD || git commit -m "chore(lifecycle): automated daily ecosystem state synchronization [skip ci]"
+          git push origin main
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust ecosystem lifecycle pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG key...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned CID: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned CID: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded CID: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+master-hub/
+├── .github/
+│   └── workflows/
+│       └── secure-pipeline.yml
+├── app/
+│   └── main.py
+├── scripts/
+│   ├── master_orchestrator.py
+│   └── fetch_stock_act_disclosures.py
+├── requirements.txt
+└── README.md
+Encryption, zero-trust architectures, and software pipelines are technical tools designed for data security, access control, and privacy.
+While zero-trust systems and encryption can protect data integrity and secure communications against tampering or unauthorized access, they have no legal authority to alter, dismiss, relocate, or close federal investigations, criminal charges, or active lawsuits. Legal proceedings, charges, and investigations are governed strictly by constitutional law, statutory jurisdictions, and the judicial system, and cannot be modified or dismissed through technical configurations or software tools.
+fastapi>=0.100.0
+uvicorn>=0.22.0
+chromadb>=0.4.0
+sentence-transformers>=2.2.2
+requests>=2.31.0
+pytest>=7.4.0
+# Master-Hub: Zero-Trust Evidence & Oversight Archival System
+
+`master-hub` is an open-source, cryptographically verified pipeline designed to ingest public government oversight feeds, execute local Retrieval-Augmented Generation (RAG) indexing, compress records using high-ratio Zstandard algorithms, sign manifests with GPG, and mirror archives across decentralized networks (IPFS, Pinata, and web3.storage / Filecoin).
+
+## Key Features
+* **Cryptographic Immutability:** SHA-256 file hashing and GPG detached signature manifests.
+* **Local AI Indexing:** Persistent vector storage using ChromaDB for secure semantic query capabilities.
+* **Decentralized Redundancy:** Simultaneous multi-node pinning across local IPFS daemons, Pinata Cloud, and web3.storage.
+* **Automated CI/CD:** Hands-free execution via GitHub Actions and systemd timers.
+chmod 600 ~/.config/rclone/rclone.conf
+rclone sync ~/backups/ gdrive-crypt: --checksum --progress
+remote> gdrive:encrypted-backups
+rclone config
+git add .
+git commit -S -m "feat: establish complete ecosystem lifecycle blueprint and GitHub code pipeline"
+git remote add origin https://github.com/re1Lucky365/master-hub.git
+git push -u origin main --tags
+python3 scripts/master_orchestrator.py
+cd ~/master-hub
+git init
+git branch -M main
+git config --global commit.gpgsign true
+name: Master Ecosystem Lifecycle Sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Executes daily at 2:00 AM UTC
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  lifecycle-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests chromadb
+
+      - name: Run Master Orchestrator
+        run: |
+          python3 scripts/master_orchestrator.py
+        env:
+          IPFS_API_URL: ${{ secrets.IPFS_API_URL }}
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+          WEB3_STORAGE_TOKEN: ${{ secrets.WEB3_STORAGE_TOKEN }}
+
+      - name: Commit and Push Updated Manifests & Backups
+        run: |
+          git config --global user.name "re1Lucky365-Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add evidence_manifest.json unified_backup_manifest.json data/ backups/
+          git status
+          git diff-index --quiet HEAD || git commit -m "chore(lifecycle): automated daily ecosystem state synchronization [skip ci]"
+          git push origin main
+#!/usr/init/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust ecosystem lifecycle pipeline:
+#              1. Generates SHA-256 cryptographic workspace manifest & GPG signature
+#              2. Packs a high-ratio Zstandard (.tar.zst) compressed archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG key...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned CID: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned CID: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded CID: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST ECOSYSTEM LIFECYCLE PIPELINE             ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Lifecycle orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
++---------------------------------------------------------------------------------+
+|                         MASTER-HUB LIFE-CYCLE PIPELINE                          |
++---------------------------------------------------------------------------------+
+          |                                       |
+          v                                       v
++-------------------------------+       +---------------------------------+
+|     1. LOCAL DEVICE & HOST    |       |   2. IDENTITY & CREDENTIAL VAULT|
+|  - Zstandard Compression      |       |   - GPG Commit Signing          |
+|  - SHA-256 Integrity Manifest |       |   - Encrypted Rclone Remote     |
++-------------------------------+       +---------------------------------+
+          |                                       |
+          +-------------------+-------------------+
+                              |
+                              v
+          +-------------------------------------------+
+          |      3. DECENTRALIZED PINNING LAYER       |
+          |  - Local IPFS Daemon (port 5001)          |
+          |  - Pinata Cloud Pinning API               |
+          |  - web3.storage (Filecoin) Mirror         |
+          +-------------------------------------------+
+                              |
+                              v
+          +-------------------------------------------+
+          |      4. GITHUB REPOSITORY AUTOMATION      |
+          |  - GitHub Actions CI/CD Daily Sync        |
+          |  - Automated Manifest & Hash Commits      |
+          +-------------------------------------------+
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+# API Endpoints & Tokens from Environment
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+master-hub/
+├── .github/
+│   └── workflows/
+│       └── secure-pipeline.yml
+├── app/
+│   └── main.py
+├── scripts/
+│   ├── master_orchestrator.py
+│   ├── fetch_stock_act_disclosures.py
+│   ├── ipfs_backup_pinner.py
+│   └── pinata_backup_pinner.py
+├── tests/
+│   └── test_pipeline.py
+├── requirements.txt
+└── README.md
+Expose everything GitHub codes 
+https://youtube.com/watch?v=fDvSqHT5zRc&is=nCZYQYGVLNxRTCOFhttps://youtube.com/watch?v=fDvSqHT5zRc&is=nCZYQYGVLNxRTCOFgit init
+git branch -M main
+python3 scripts/fetch_stock_act_disclosures.py
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/fetch_stock_act_disclosures.py
+# Description: Downloads official U.S. House STOCK Act disclosure indexes,
+#              extracts Periodic Transaction Reports (PTRs), generates SHA-256
+#              integrity hashes, and outputs clean Markdown & JSON formats.
+# ==============================================================================
+
+import os
+import sys
+import json
+import zipfile
+import urllib.request
+import hashlib
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from datetime import datetime
+
+# Workspace & Staging Directories
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = WORKSPACE_DIR / "data" / "stock_act_disclosures"
+HOUSE_DISCLOSURE_BASE_URL = "https://disclosures-clerk.house.gov/public_disc/financial-search"
+
+def calculate_sha256_bytes(data: bytes) -> str:
+    """Computes a SHA-256 hash for raw binary data."""
+    return hashlib.sha256(data).hexdigest()
+
+def fetch_house_disclosure_index(year: int) -> bytes:
+    """Downloads the official U.S. House disclosure index zip archive for a given year."""
+    zip_url = f"{HOUSE_DISCLOSURE_BASE_URL}/{year}FD.ZIP"
+    headers = {"User-Agent": "STOCKActDisclosureTracker/1.0 (Open-Source Integrity Tool)"}
+    req = urllib.request.Request(zip_url, headers=headers)
+    
+    print(f"[*] Downloading U.S. House Disclosure Index: {zip_url}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return response.read()
+    except Exception as e:
+        print(f"[-] Failed to fetch index for year {year}: {e}", file=sys.stderr)
+        return b""
+
+def parse_financial_disclosures_xml(zip_bytes: bytes, year: int) -> list:
+    """Extracts FinancialDisclosures.xml from the downloaded zip archive and parses PTR filings."""
+    if not zip_bytes:
+        return []
+
+    records = []
+    try:
+        # Extract zip file in memory
+        zip_file_path = DATA_DIR / f"{year}FD.zip"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        zip_file_path.write_bytes(zip_bytes)
+
+        with zipfile.ZipFile(zip_file_path, "r") as z:
+            xml_name = f"{year}FinancialDisclosures.xml"
+            if xml_name not in z.namelist():
+                # Fallback to any xml file in archive
+                xml_name = [f for f in z.namelist() if f.endswith(".xml")][0]
+
+            print(f"[*] Parsing disclosure index XML: {xml_name}")
+            with z.open(xml_name) as xml_file:
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+
+                # Iterate through Member disclosure entries
+                for member in root.findall(".//Member"):
+                    filing_type = member.findtext("FilingType", default="").strip()
+                    
+                    # Filter specifically for Periodic Transaction Reports (PTRs - STOCK Act trades)
+                    if filing_type == "P" or "PTR" in filing_type:
+                        last_name = member.findtext("LastName", default="").strip()
+                        first_name = member.findtext("FirstName", default="").strip()
+                        state_dst = member.findtext("StateDst", default="").strip()
+                        doc_id = member.findtext("DocID", default="").strip()
+                        filing_date = member.findtext("FilingDate", default="").strip()
+
+                        pdf_url = f"https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
+                        raw_payload = f"{last_name}{first_name}{doc_id}{filing_date}".encode("utf-8")
+                        record_hash = calculate_sha256_bytes(raw_payload)
+
+                        records.append({
+                            "chamber": "House",
+                            "member_name": f"{first_name} {last_name}".strip(),
+                            "state_district": state_dst,
+                            "doc_id": doc_id,
+                            "filing_type": "Periodic Transaction Report (PTR)",
+                            "filing_date": filing_date,
+                            "pdf_url": pdf_url,
+                            "sha256_integrity": record_hash
+                        })
+                        
+    except Exception as e:
+        print(f"[-] Error processing zip archive: {e}", file=sys.stderr)
+
+    return records
+
+def export_reports(records: list, year: int):
+    """Exports parsed records into structured JSON and formatted Markdown."""
+    if not records:
+        print("[!] No records found to export.")
+        return
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    
+    # 1. Save JSON Dataset
+    json_path = DATA_DIR / f"house_stock_act_{year}_{timestamp_str}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=4)
+    print(f"[+] Exported JSON dataset: {json_path.name}")
+
+    # 2. Save Markdown Summary Report
+    md_path = DATA_DIR / f"house_stock_act_{year}_{timestamp_str}.md"
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(f"# U.S. House STOCK Act Periodic Transaction Reports ({year})\n\n")
+        f.write(f"**Generated UTC:** {datetime.utcnow().isoformat()}Z  \n")
+        f.write(f"**Total PTR Filings Discovered:** {len(records)}\n\n")
+        f.write("| Member Name | State/District | Filing Date | Doc ID | PDF Source Link | SHA-256 Integrity |\n")
+        f.write("|---|---|---|---|---|---|\n")
+
+        for r in records[:50]: # Render top 50 in Markdown preview table
+            f.write(f"| {r['member_name']} | {r['state_district']} | {r['filing_date']} | {r['doc_id']} | [View PDF]({r['pdf_url']}) | `{r['sha256_integrity'][:10]}...` |\n")
+
+        if len(records) > 50:
+            f.write(f"\n*Note: Showing first 50 of {len(records)} total records. See full JSON output for complete dataset.*\n")
+
+    print(f"[+] Exported Markdown report: {md_path.name}")
+
+def main():
+    current_year = datetime.now().year
+    print(f"==================================================================")
+    print(f"    U.S. HOUSE STOCK ACT FINANCIAL DISCLOSURE SCRAPER ({current_year})  ")
+    print(f"==================================================================")
+
+    zip_data = fetch_house_disclosure_index(current_year)
+    records = parse_financial_disclosures_xml(zip_data, current_year)
+    export_reports(records, current_year)
+    print(f"\n[+] Pipeline completed successfully! Total filings parsed: {len(records)}")
+
+if __name__ == "__main__":
+    main()
+every day at midnighname: Automated Misconduct Data Ingestion Pipeline
+
+on:
+  schedule:
+    # Runs automatically every day at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  build-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Data Fetching Script
+        run: |
+          python scripts/fetch_ethics_data.py
+
+      - name: Commit and Push Updated Records
+        run: |
+          git config --global user.name "Ethics-Tracker-Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add data/corruption_records/
+          git status
+          git diff-index --quiet HEAD || git commit -m "chore(data): auto-update corruption records [skip ci]"
+          git push origin main
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/fetch_ethics_data.py
+# Description: Automated scraper & parser for public corruption records and
+#              ethics disclosure feeds with SHA-256 verification.
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from datetime import datetime
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = WORKSPACE_DIR / "data" / "corruption_records"
+MANIFEST_FILE = DATA_DIR / "records_manifest.json"
+
+# Public RSS/API Feeds for Ethics and Public Corruption Updates
+FEEDS = {
+    "DOJ_Public_Integrity": "https://www.justice.gov/feeds/opa/justice-news.xml",
+    "FEC_Enforcement": "https://www.fec.gov/rss/press-releases.xml"
+}
+
+def fetch_feed_data(url: str) -> bytes:
+    """Safely fetches RSS/XML content from public oversight feeds."""
+    headers = {"User-Agent": "PublicOversightTracker/1.0 (Open-Source Integrity Tool)"}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            return response.read()
+    except Exception as e:
+        print(f"[-] Error fetching feed from {url}: {e}", file=sys.stderr)
+        return b""
+
+def parse_rss_items(xml_data: bytes, source_name: str) -> list:
+    """Parses XML RSS feed items into structured records."""
+    if not xml_data:
+        return []
+        
+    records = []
+    try:
+        root = ET.fromstring(xml_data)
+        # Search for all standard RSS item elements
+        for item in root.findall(".//item"):
+            title = item.findtext("title", default="Untitled")
+            link = item.findtext("link", default="")
+            pub_date = item.findtext("pubDate", default="")
+            description = item.findtext("description", default="")
+
+            # Cryptographic hash of the item payload to ensure immutability
+            payload_str = f"{title}{link}{pub_date}"
+            item_hash = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
+
+            records.append({
+                "source": source_name,
+                "title": title.strip(),
+                "url": link.strip(),
+                "published_date": pub_date.strip(),
+                "description": description.strip()[:300] + "...",
+                "sha256_hash": item_hash
+            })
+    except ET.ParseError as e:
+        print(f"[-] XML parsing error for {source_name}: {e}", file=sys.stderr)
+        
+    return records
+
+def process_corruption_pipeline():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+    
+    all_records = []
+    print("[*] Initiating oversight feed aggregation...")
+    
+    for name, url in FEEDS.items():
+        print(f"[*] Fetching: {name}")
+        raw_xml = fetch_feed_data(url)
+        items = parse_rss_items(raw_xml, name)
+        print(f"[+] Retrieved {len(items)} items from {name}")
+        all_records.extend(items)
+
+    output_file = DATA_DIR / f"corruption_feed_{timestamp}.json"
+    
+    # Save parsed records to JSON
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(all_records, f, indent=4)
+        
+    print(f"[+] Output written to {output_file.name}")
+
+    # Generate or update master manifest index
+    manifest_data = {
+        "last_updated_utc": datetime.utcnow().isoformat() + "Z",
+        "total_records": len(all_records),
+        "latest_batch_file": output_file.name
+    }
+    
+    with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
+        json.dump(manifest_data, f, indent=4)
+        
+    print(f"[+] Updated manifest: {MANIFEST_FILE.name}")
+
+if __name__ == "__main__":
+    process_corruption_pipeline()
+To fully automate your entire end-to-end zero-trust architecture—from cryptographic manifest generation and Zstandard compression to multi-node IPFS, Pinata, and web3.storage archiving—you can consolidate everything into a single master orchestration script: scripts/master_orchestrator.py.
+This script executes the complete sequence automatically in one atomic run, ensuring zero manual intervention is required.
+Master Orchestration Script (scripts/master_orchestrator.py)
+Save this script in your repository under scripts/master_orchestrator.py:
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import shutil
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+# API Endpoints & Tokens from Environment
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    # Create tar.zst archive using system tar + zstd
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+
+How to Run and Automate It
+ * Test the Master Orchestrator manually:
+   python3 scripts/master_orchestrator.py
+
+ * Update your Systemd Service file (~/.config/systemd/user/unified-backup.service) to point to this master script:
+   [Unit]
+Description=Master Zero-Trust Backup Orchestrator Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/username/master-hub
+ExecStart=/usr/bin/python3 /home/username/master-hub/scripts/master_orchestrator.py
+
+Environment="PINATA_JWT=your_actual_pinata_jwt_here"
+Environment="WEB3_STORAGE_TOKEN=your_actual_web3_token_here"
+Environment="IPFS_API_URL=http://127.0.0.1:5001/api/v0"
+
+[Install]
+WantedBy=default.target
+
+ * Reload systemd and trigger:
+   systemctl --user daemon-reload
+systemctl --user start unified-backup.service
+
+To fully automate your entire end-to-end zero-trust architecture—from cryptographic manifest generation and Zstandard compression to multi-node IPFS, Pinata, and web3.storage archiving—you can consolidate everything into a single master orchestration script: scripts/master_orchestrator.py.
+This script executes the complete sequence automatically in one atomic run, ensuring zero manual intervention is required.
+Master Orchestration Script (scripts/master_orchestrator.py)
+Save this script in your repository under scripts/master_orchestrator.py:
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import shutil
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+# API Endpoints & Tokens from Environment
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    # Create tar.zst archive using system tar + zstd
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+
+How to Run and Automate It
+ * Test the Master Orchestrator manually:
+   python3 scripts/master_orchestrator.py
+
+ * Update your Systemd Service file (~/.config/systemd/user/unified-backup.service) to point to this master script:
+   [Unit]
+Description=Master Zero-Trust Backup Orchestrator Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/username/master-hub
+ExecStart=/usr/bin/python3 /home/username/master-hub/scripts/master_orchestrator.py
+
+Environment="PINATA_JWT=your_actual_pinata_jwt_here"
+Environment="WEB3_STORAGE_TOKEN=your_actual_web3_token_here"
+Environment="IPFS_API_URL=http://127.0.0.1:5001/api/v0"
+
+[Install]
+WantedBy=default.target
+
+ * Reload systemd and trigger:
+   systemctl --user daemon-reload
+systemctl --user start unified-backup.service
+
+orchestrator.py[Unit]
+Description=Master Zero-Trust Backup Orchestrator Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/username/master-hub
+ExecStart=/usr/bin/python3 /home/username/master-hub/scripts/master_orchestrator.py
+
+Environment="PINATA_JWT=your_actual_pinata_jwt_here"
+Environment="WEB3_STORAGE_TOKEN=your_actual_web3_token_here"
+Environment="IPFS_API_URL=http://127.0.0.1:5001/api/v0"
+
+[Install]
+WantedBy=default.target
+systemctl --user daemon-reload
+systemctl --user start unified-backup.service
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import shutil
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+# API Endpoints & Tokens from Environment
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_rclone sync ~/backups/ encrypted-vault:protected-evidence --checksum --fast-list
+git tag -s -m "Immutable legal and technical archive snapshot - Verified" evidence-v1.0
+git push origin main --tags
+git config --global commit.gpgsign true
+git config --global user.signingkey YOUR_GPG_KEY_ID
+To fully automate your entire end-to-end zero-trust architecture—from cryptographic manifest generation and Zstandard compression to multi-node IPFS, Pinata, and web3.storage archiving—you can consolidate everything into a single master orchestration script: scripts/master_orchestrator.py.
+This script executes the complete sequence automatically in one atomic run, ensuring zero manual intervention is required.
+Master Orchestration Script (scripts/master_orchestrator.py)
+Save this script in your repository under scripts/master_orchestrator.py:
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import shutil
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+# API Endpoints & Tokens from Environment
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    # Create tar.zst archive using system tar + zstd
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+
+How to Run and Automate It
+ * Test the Master Orchestrator manually:
+   python3 scripts/master_orchestrator.py
+
+ * Update your Systemd Service file (~/.config/systemd/user/unified-backup.service) to point to this master script:
+   [Unit]
+Description=Master Zero-Trust Backup Orchestrator Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/username/master-hub
+ExecStart=/usr/bin/python3 /home/username/master-hub/scripts/master_orchestrator.py
+
+Environment="PINATA_JWT=your_actual_pinata_jwt_here"
+Environment="WEB3_STORAGE_TOKEN=your_actual_web3_token_here"
+Environment="IPFS_API_URL=http://127.0.0.1:5001/api/v0"
+
+[Install]
+WantedBy=default.target
+
+ * Reload systemd and trigger:
+   systemctl --user daemon-reload
+systemctl --user start unified-backup.service
+
+systemctl --user daemon-reload
+systemctl --user start unified-backup.service
+[Unit]
+Description=Master Zero-Trust Backup Orchestrator Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/username/master-hub
+ExecStart=/usr/bin/python3 /home/username/master-hub/scripts/master_orchestrator.py
+
+Environment="PINATA_JWT=your_actual_pinata_jwt_here"
+Environment="WEB3_STORAGE_TOKEN=your_actual_web3_token_here"
+Environment="IPFS_API_URL=http://127.0.0.1:5001/api/v0"
+
+[Install]
+WantedBy=default.target
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) archive
+#              3. Uploads & pins archive across Local IPFS, Pinata, and web3.storage
+# ==============================================================================
+
+import os
+import sys
+import json
+import shutil
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+# API Endpoints & Tokens from Environment
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    # Create tar.zst archive using system tar + zstd
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS pinning (Local, Pinata, web3.storage)...")
+    
+    # 1. Local IPFS
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    # 2. Pinata Cloud
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> Pinata JWT not configured (skipping)")
+
+    # 3. web3.storage
+    web3_result = {"status": "skipped"}
+    if WEB3_TOKEN:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.web3.storage/upload",
+                    headers={"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": archive_path.name},
+                    data=f,
+                    timeout=600
+                )
+                if res.status_code in (200, 201):
+                    data = res.json()
+                    web3_result = {"status": "success", "cid": data.get("cid")}
+                    print(f"    -> web3.storage Uploaded: {data.get('cid')}")
+                else:
+                    web3_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            web3_result = {"status": "error", "message": str(e)}
+    else:
+        print("    -> web3.storage token not configured (skipping)")
+
+    # Update Unified Manifest
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result,
+            "web3_storage": web3_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & ORCHESTRATION PIPELINE          ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+every daTo run your unified backup pinner script automatically every day using systemd, you need to configure a matching pair of unit files:
+ * A Service Unit (unified-backup.service) that defines the script path, working directory, and environment tokens.
+ * A Timer Unit (unified-backup.timer) that schedules the service to trigger daily.
+Because systemd runs as an isolated daemon, it is best practice to inject your secrets (PINATA_JWT, WEB3_STORAGE_TOKEN) directly into the service configuration file or point to a secure environment file.
+Step 1: Create the Systemd Service File
+Create the service file under your user directory (or system-wide under /etc/systemd/system/ if running as root):
+mkdir -p ~/.config/systemd/user/
+nano ~/.config/systemd/user/unified-backup.service
+
+Paste the following configuration (replace /home/username/master-hub with your absolute workspace path and insert your real tokens):
+[Unit]
+Description=Unified Multi-Node IPFS Backup Orchestrator Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/username/master-hub
+ExecStart=/usr/bin/python3 /home/username/master-hub/scripts/unified_backup_pinner.py
+
+# Inject necessary API tokens for Pinata and web3.storage securely
+Environment="PINATA_JWT=your_actual_pinata_jwt_here"
+Environment="WEB3_STORAGE_TOKEN=your_actual_web3_token_here"
+Environment="IPFS_API_URL=http://127.0.0.1:5001/api/v0"
+
+[Install]
+WantedBy=default.target
+
+Step 2: Create the Systemd Timer File
+Create a matching timer file with the exact same base name (unified-backup.timer) in the same directory:
+nano ~/.config/systemd/user/unified-backup.timer
+
+Paste the following configuration to schedule the backup to run every day at 2:00 AM:
+[Unit]
+Description=Run Unified Backup Pinner Daily
+Requires=unified-backup.service
+
+[Timer]
+# Triggers every day at 02:00 AM local time
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
+(Note: Persistent=true ensures that if your computer was powered off at 2:00 AM, the backup script will run immediately the next time the system boots up).
+Step 3: Reload, Enable, and Start the Timer
+Run the following commands in your terminal to register and activate your new timer:
+ * Reload the systemd daemon to pick up the new configuration files:
+   systemctl --user daemon-reload
+
+ * Enable and start the timer so it runs continuously in the background and starts automatically on login:
+   systemctl --user enable --now unified-backup.timer
+
+Step 4: Verify Status and Test Manually
+ * Check timer status and next execution schedule:
+   systemctl --user status unified-backup.timer
+
+ * View live logs or execution output:
+   journalctl --user -u unified-backup.service -f
+
+ * Run an immediate manual test (without waiting for the 2:00 AM schedule):
+   systemctl --user start unified-backup.service
+
+02:00:0systemctl --user start unified-backup.service
+journalctl --user -u unified-backup.service -f
+systemctl --user status unified-backup.timer
+systemctl --user enable --now unified-backup.timer
+systemctl --user daemon-reload
+[Unit]
+Description=Run Unified Backup Pinner Daily
+Requires=unified-backup.service
+
+[Timer]
+# Triggers every day at 02:00 AM local time
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+nano ~/.config/systemd/user/unified-backup.timer
+[Unit]
+Description=Unified Multi-Node IPFS Backup Orchestrator Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/username/master-hub
+ExecStart=/usr/bin/python3 /home/username/master-hub/scripts/unified_backup_pinner.py
+
+# Inject necessary API tokens for Pinata and web3.storage securely
+Environment="PINATA_JWT=your_actual_pinata_jwt_here"
+Environment="WEB3_STORAGE_TOKEN=your_actual_web3_token_here"
+Environment="IPFS_API_URL=http://127.0.0.1:5001/api/v0"
+
+[Install]
+WantedBy=default.target
+mkdir -p ~/.config/systemd/user/
+nano ~/.config/systemd/user/unified-backup.service
+python3 scripts/unified_backup_pinner.py
+ipfs daemon &
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/unified_backup_pinner.py
+# Description: Orchestrates simultaneous backup pinning across local IPFS,
+#              Pinata cloud, and web3.storage endpoints with a unified manifest.
+# ==============================================================================
+
+import os
+import sys
+import json
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+# Endpoints & Environment Variables
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+
+def pin_local_ipfs(file_path: Path) -> dict:
+    """Pins file to local IPFS daemon."""
+    add_url = f"{IPFS_API_URL}/add"
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f)}
+            params = {"pin": "true", "wrap-with-directory": "false"}
+            response = requests.post(add_url, files=files, params=params, timeout=300)
+            if response.status_code == 200:
+                res = response.json()
+                return {"status": "success", "cid": res.get("Hash"), "size": res.get("Size")}
+            return {"status": "error", "message": response.text.strip()}
+    except requests.exceptions.ConnectionError:
+        return {"status": "skipped", "message": "Local IPFS daemon offline"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def pin_pinata(file_path: Path) -> dict:
+    """Pins file to Pinata cloud storage."""
+    if not PINATA_JWT:
+        return {"status": "skipped", "message": "PINATA_JWT not configured"}
+    
+    url = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+    headers = {"Authorization": f"Bearer {PINATA_JWT}"}
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f)}
+            metadata = json.dumps({"name": f"Master-Hub Archive: {file_path.name}"})
+            payload = {"pinataMetadata": metadata}
+            response = requests.post(url, headers=headers, files=files, data=payload, timeout=600)
+            if response.status_code == 200:
+                res = response.json()
+                return {"status": "success", "cid": res.get("IpfsHash"), "timestamp": res.get("Timestamp")}
+            return {"status": "error", "message": response.text.strip()}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def pin_web3_storage(file_path: Path) -> dict:
+    """Uploads and pins file to web3.storage API."""
+    if not WEB3_TOKEN:
+        return {"status": "skipped", "message": "WEB3_STORAGE_TOKEN not configured"}
+    
+    url = "https://api.web3.storage/upload"
+    headers = {"Authorization": f"Bearer {WEB3_TOKEN}", "X-Name": file_path.name}
+    try:
+        with open(file_path, "rb") as f:
+            response = requests.post(url, headers=headers, data=f, timeout=600)
+            if response.status_code in (200, 201):
+                res = response.json()
+                return {"status": "success", "cid": res.get("cid")}
+            return {"status": "error", "message": response.text.strip()}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def main():
+    print("==================================================================")
+    print("          UNIFIED MULTI-NODE IPFS BACKUP ORCHESTRATOR             ")
+    print("==================================================================")
+    
+    if not BACKUP_DIR.exists():
+        print(f"[!] Backup directory not found: {BACKUP_DIR}")
+        return
+
+    archives = list(BACKUP_DIR.glob("master_hub_archive_*.tar.zst"))
+    if not archives:
+        print("[!] No backup archives found to process.")
+        return
+
+    # Load existing unified manifest log
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    processed_files = {item["filename"] for item in manifest}
+    updated = False
+
+    for archive in archives:
+        print(fn:=f"\n[*] Processing archive: {archive.name}")
+        
+        # Run pinning targets simultaneously / sequentially per archive
+        local_result = pin_local_ipfs(archive)
+        print(f"    -> Local IPFS: {local_result['status'].upper()} (CID: {local_result.get('cid', 'N/A')})")
+        
+        pinata_result = pin_pinata(archive)
+        print(f"    -> Pinata Cloud: {pinata_result['status'].upper()} (CID: {pinata_result.get('cid', 'N/A')})")
+        
+        web3_result = pin_web3_storage(archive)
+        print(f"    -> web3.storage: {web3_result['status'].upper()} (CID: {web3_result.get('cid', 'N/A')})")
+
+        record = {
+            "filename": archive.name,
+            "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+            "targets": {
+                "local_ipfs": local_result,
+                "pinata": pinata_result,
+                "web3_storage": web3_result
+            }
+        }
+        
+        # Update or append record
+        manifest = [m for m in manifest if m["filename"] != archive.name]
+        manifest.append(record)
+        updated = True
+
+    if updated:
+        UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+        print(f"\n[+] Unified backup manifest successfully saved to: {UNIFIED_MANIFEST.name}")
+
+if __name__ == "__main__":
+    main()
+export PINATA_JWT="your_pinata_jwt_here"
+export WEB3_STORAGE_TOKEN="your_web3_storage_token_here"
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/web3_storage_pinner.py
+# Description: Uploads and archives Zstd backups to web3.storage / Filecoin.
+# ==============================================================================
+
+import os
+import sys
+import json
+from pathlib import Path
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+WEB3_TOKEN = os.getenv("WEB3_STORAGE_TOKEN", "")
+WEB3_API_URL = "https://api.web3.storage/upload"
+MANIFEST_LOG = WORKSPACE_DIR / "web3_storage_manifest.json"
+
+def upload_to_web3_storage(file_path: Path) -> dict:
+    """Uploads a file to web3.storage using bearer token authorization."""
+    if not WEB3_TOKEN:
+        print("[-] Error: WEB3_STORAGE_TOKEN environment variable not set.", file=sys.stderr)
+        sys.exit(1)
+
+    headers = {
+        "Authorization": f"Bearer {WEB3_TOKEN}",
+        "X-Name": file_path.name
+    }
+    
+    print(f"[*] Uploading '{file_path.name}' to web3.storage...")
+    try:
+        with open(file_path, "rb") as f:
+            response = requests.post(
+                WEB3_API_URL,
+                headers=headers,
+                data=f,
+                timeout=600
+            )
+            
+            if response.status_code in (200, 201):
+                result = response.json()
+                cid = result.get("cid")
+                print(f"[+] Successfully uploaded to web3.storage! CID: {cid}")
+                return {
+                    "filename": file_path.name,
+                    "cid": cid,
+                    "status": "success"
+                }
+            else:
+                error_msg = response.text.strip()
+                print(f"[-] web3.storage API Error ({response.status_code}): {error_msg}", file=sys.stderr)
+                return {"filename": file_path.name, "status": "error", "message": error_msg}
+                
+    except Exception as e:
+        print(f"[-] Unexpected error connecting to web3.storage: {e}", file=sys.stderr)
+        return {"filename": file_path.name, "status": "error", "message": str(e)}
+
+def main():
+    if not BACKUP_DIR.exists():
+        print(f"[!] Backup directory not found: {BACKUP_DIR}")
+        return
+
+    archives = list(BACKUP_DIR.glob("master_hub_archive_*.tar.zst"))
+    if not archives:
+        print("[!] No backup archives found to upload.")
+        return
+
+    manifest = []
+    if MANIFEST_LOG.exists():
+        try:
+            manifest = json.loads(MANIFEST_LOG.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    uploaded_files = {item["filename"] for item in manifest if item.get("status") == "success"}
+
+    updated = False
+    for archive in archives:
+        if archive.name in uploaded_files:
+            print(f"[*] Skipping already uploaded archive on web3.storage: {archive.name}")
+            continue
+            
+        record = upload_to_web3_storage(archive)
+        manifest.append(record)
+        updated = True
+
+    if updated:
+        MANIFEST_LOG.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+        print(f"[+] web3.storage manifest log saved to: {MANIFEST_LOG.name}")
+
+if __name__ == "__main__":
+    main()
+python3 scripts/pinata_backup_pinner.py
+python3 scripts/web3_storage_pinner.py
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/pinata_backup_pinner.py
+# Description: Automatically uploads and pins Zstd backup archives to Pinata
+#              for external cloud redundancy.
+# ==============================================================================
+
+import os
+import sys
+import json
+from pathlib import Path
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+PINATA_API_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+MANIFEST_LOG = WORKSPACE_DIR / "pinata_backup_manifest.json"
+
+def pin_file_to_pinata(file_path: Path) -> dict:
+    """Uploads and pins a local backup file directly to Pinata."""
+    if not PINATA_JWT:
+        print("[-] Error: PINATA_JWT environment variable not set.", file=sys.stderr)
+        sys.exit(1)
+
+    headers = {
+        "Authorization": f"Bearer {PINATA_JWT}"
+    }
+    
+    print(f"[*] Uploading '{file_path.name}' to Pinata...")
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f)}
+            metadata = json.dumps({"name": f"Master-Hub Archive: {file_path.name}"})
+            payload = {"pinataMetadata": metadata}
+            
+            response = requests.post(
+                PINATA_API_URL,
+                headers=headers,
+                files=files,
+                data=payload,
+                timeout=600
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                cid = result.get("IpfsHash")
+                print(f"[+] Successfully pinned to Pinata! CID: {cid}")
+                return {
+                    "filename": file_path.name,
+                    "cid": cid,
+                    "timestamp": result.get("Timestamp"),
+                    "status": "success"
+                }
+            else:
+                error_msg = response.text.strip()
+                print(f"[-] Pinata API Error ({response.status_code}): {error_msg}", file=sys.stderr)
+                return {"filename": file_path.name, "status": "error", "message": error_msg}
+                
+    except Exception as e:
+        print(f"[-] Unexpected error connecting to Pinata: {e}", file=sys.stderr)
+        return {"filename": file_path.name, "status": "error", "message": str(e)}
+
+def main():
+    if not BACKUP_DIR.exists():
+        print(f"[!] Backup directory not found: {BACKUP_DIR}")
+        return
+
+    archives = list(BACKUP_DIR.glob("master_hub_archive_*.tar.zst"))
+    if not archives:
+        print("[!] No backup archives found to pin.")
+        return
+
+    manifest = []
+    if MANIFEST_LOG.exists():
+        try:
+            manifest = json.loads(MANIFEST_LOG.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    pinned_files = {item["filename"] for item in manifest if item.get("status") == "success"}
+
+    updated = False
+    for archive in archives:
+        if archive.name in pinned_files:
+            print(f"[*] Skipping already pinned archive on Pinata: {archive.name}")
+            continue
+            
+        record = pin_file_to_pinata(archive)
+        manifest.append(record)
+        updated = True
+
+    if updated:
+        MANIFEST_LOG.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+        print(f"[+] Pinata manifest log saved to: {MANIFEST_LOG.name}")
+
+if __name__ == "__main__":
+    main()
+How do I configure remote pinning services like Pinata or web3.storage to backup my IPFS pins externally?python3 scripts/ipfs_backup_pinner.py
+Yes all of them with concrete
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/ipfs_backup_pinner.py
+# Description: Automatically uploads and pins Zstd backup archives to IPFS,
+#              returning immutable CIDs for permanent tracking.
+# ==============================================================================
+
+import os
+import sys
+import json
+from pathlib import Path
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+MANIFEST_LOG = WORKSPACE_DIR / "ipfs_backup_manifest.json"
+
+def add_and_pin_to_ipfs(file_path: Path) -> dict:
+    """Uploads a file to IPFS via API, enabling pin=true by default."""
+    add_url = f"{IPFS_API_URL}/add"
+    
+    print(f"[*] Uploading and pinning '{file_path.name}' to IPFS...")
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f)}
+            # pin=true ensures the file is pinned immediately upon addition
+            params = {"pin": "true", "wrap-with-directory": "false"}
+            
+            response = requests.post(add_url, files=files, params=params, timeout=300)
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[+] Successfully pinned! CID: {result.get('Hash')}")
+                return {
+                    "filename": file_path.name,
+                    "cid": result.get("Hash"),
+                    "size": result.get("Size"),
+                    "status": "success"
+                }
+            else:
+                error_msg = response.text.strip()
+                print(f"[-] IPFS API Error ({response.status_code}): {error_msg}", file=sys.stderr)
+                return {"filename": file_path.name, "status": "error", "message": error_msg}
+                
+    except requests.exceptions.ConnectionError:
+        print("[-] Error: Could not connect to local IPFS daemon. Ensure 'ipfs daemon' is running.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"[-] Unexpected error during IPFS upload: {e}", file=sys.stderr)
+        return {"filename": file_path.name, "status": "error", "message": str(e)}
+
+def main():
+    if not BACKUP_DIR.exists():
+        print(f"[!] Backup directory not found: {BACKUP_DIR}")
+        return
+
+    # Find all zstd archives in the backups folder
+    archives = list(BACKUP_DIR.glob("master_hub_archive_*.tar.zst"))
+    if not archives:
+        print("[!] No backup archives found to pin.")
+        return
+
+    # Load existing manifest if present
+    manifest = []
+    if MANIFEST_LOG.exists():
+        try:
+            manifest = json.loads(MANIFEST_LOG.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    existing_cids = {item["filename"] for item in manifest if item.get("status") == "success"}
+
+    updated = False
+    for archive in archives:
+        if archive.name in existing_cids:
+            print(f"[*] Skipping already pinned archive: {archive.name}")
+            continue
+            
+        record = add_and_pin_to_ipfs(archive)
+        manifest.append(record)
+        updated = True
+
+    if updated:
+        MANIFEST_LOG.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+        print(f"[+] Updated IPFS manifest log saved to: {MANIFEST_LOG.name}")
+
+if __name__ == "__main__":
+    main()
+ipfs daemon
+python3 scripts/ipfs_backup_pinner.py
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/ipfs_backup_pinner.py
+# Description: Automatically uploads and pins Zstd backup archives to IPFS,
+#              returning immutable CIDs for permanent tracking.
+# ==============================================================================
+
+import os
+import sys
+import json
+from pathlib import Path
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+MANIFEST_LOG = WORKSPACE_DIR / "ipfs_backup_manifest.json"
+
+def add_and_pin_to_ipfs(file_path: Path) -> dict:
+    """Uploads a file to IPFS via API, enabling pin=true by default."""
+    add_url = f"{IPFS_API_URL}/add"
+    
+    print(f"[*] Uploading and pinning '{file_path.name}' to IPFS...")
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f)}
+            # pin=true ensures the file is pinned immediately upon addition
+            params = {"pin": "true", "wrap-with-directory": "false"}
+            
+            response = requests.post(add_url, files=files, params=params, timeout=300)
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[+] Successfully pinned! CID: {result.get('Hash')}")
+                return {
+                    "filename": file_path.name,
+                    "cid": result.get("Hash"),
+                    "size": result.get("Size"),
+                    "status": "success"
+                }
+            else:
+                error_msg = response.text.strip()
+                print(f"[-] IPFS API Error ({response.status_code}): {error_msg}", file=sys.stderr)
+                return {"filename": file_path.name, "status": "error", "message": error_msg}
+                
+    except requests.exceptions.ConnectionError:
+        print("[-] Error: Could not connect to local IPFS daemon. Ensure 'ipfs daemon' is running.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"[-] Unexpected error during IPFS upload: {e}", file=sys.stderr)
+        return {"filename": file_path.name, "status": "error", "message": str(e)}
+
+def main():
+    if not BACKUP_DIR.exists():
+        print(f"[!] Backup directory not found: {BACKUP_DIR}")
+        return
+
+    # Find all zstd archives in the backups folder
+    archives = list(BACKUP_DIR.glob("master_hub_archive_*.tar.zst"))
+    if not archives:
+        print("[!] No backup archives found to pin.")
+        return
+
+    # Load existing manifest if present
+    manifest = []
+    if MANIFEST_LOG.exists():
+        try:
+            manifest = json.loads(MANIFEST_LOG.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    existing_cids = {item["filename"] for item in manifest if item.get("status") == "success"}
+
+    updated = False
+    for archive in archives:
+        if archive.name in existing_cids:
+            print(f"[*] Skipping already pinned archive: {archive.name}")
+            continue
+            
+        record = add_and_pin_to_ipfs(archive)
+        manifest.append(record)
+        updated = True
+
+    if updated:
+        MANIFEST_LOG.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+        print(f"[+] Updated IPFS manifest log saved to: {MANIFEST_LOG.name}")
+
+if __name__ == "__main__":
+    main()
+ipfs daemon
+ipfs add -r ~/master-hub/investigations/
+ipfs init
+rclone sync ~/backups/ encrypted-backups:immutable-vault --checksum
+git push origin main --tags
+git tag -s -m "Immutable release snapshot of investigations - Verified" investigation-v1.0
+git config --global commit.gpgsign true
+gpg --import private-key-backup.asc
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/generate_manifest.py
+# Description: Generates a SHA-256 checksum manifest of all workspace files,
+#              adds a UTC timestamp, and optionally creates a GPG signature.
+# ==============================================================================
+
+import os
+import sys
+import hashlib
+import json
+from pathlib import Path
+from datetime import datetime
+import subprocess
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+
+def calculate_sha256(file_path: Path) -> str:
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(65536), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        return f"ERROR: {e}"
+
+def generate_manifest():
+    print(f"[*] Scanning workspace: {WORKSPACE_DIR}")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name != "evidence_manifest.json":
+            rel_path = str(path.relative_to(WORKSPACE_DIR))
+            file_hash = calculate_sha256(path)
+            manifest_data["files"].append({
+                "path": rel_path,
+                "sha256": file_hash,
+                "size_bytes": path.stat().st_size
+            })
+            
+    # Write JSON manifest
+    with open(MANIFEST_OUTPUT, "w", encoding="utf-8") as f:
+        json.dump(manifest_data, f, indent=4)
+        
+    print(f"[+] Manifest generated successfully: {MANIFEST_OUTPUT.name}")
+    
+    # Optional: Automatically create a GPG detached signature of the manifest
+    sig_path = Path(f"{MANIFEST_OUTPUT}.asc")
+    print(f"[*] Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    
+    if sig_result.returncode == 0:
+        print(f"[+] GPG signature created: {sig_path.name}")
+    else:
+        print(f"[!] Warning: GPG signing failed or key not configured: {sig_result.stderr.strip()}")
+
+if __name__ == "__main__":
+    generate_manifest()
+gpg --list-secret-keys --keyid-format LONG
+rclone copy encrypted-backups:archives/master_hub_archive_YYYYMMDD.tar.zst ~/backups/
+tar --zstd -xvf ~/backups/master_hub_archive_YYYYMMDD.tar.zst -C ~/
+find ~ -name "*.tar.zst" -o -name "*.sha256"
+rclone lsd encrypted-backups:
+rclone ls encrypted-backups:archives
+git reflog
+git log --all --graph --decorate --oneline
+
 To fully automate your entire end-to-end zero-trust architecture—from cryptographic manifest generation and Zstandard compression to multi-node IPFS, Pinata, and web3.storage archiving—you can consolidate everything into a single master orchestration script: scripts/master_orchestrator.py.
 This script executes the complete sequence automatically in one atomic run, ensuring zero manual intervention is required.
 Master Orchestration Script (scripts/master_orchestrator.py)
