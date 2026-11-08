@@ -1,3 +1,464 @@
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/global_monitoring_manifest.py
+# Description: Consolidates device hardware, dual-SIM configurations, contact 
+#              networks, and monitoring parameters into an immutable manifest.
+# ==============================================================================
+
+import json
+import subprocess
+from pathlib import Path
+from datetime import datetime
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+MONITORING_DIR = WORKSPACE_DIR / "monitoring_vault"
+MANIFEST_PATH = MONITORING_DIR / "global_ecosystem_manifest.json"
+
+def compile_global_manifest():
+    print("[*] Compiling global ecosystem and device monitoring manifest...")
+    MONITORING_DIR.mkdir(parents=True, exist_ok=True)
+    
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "operator": {
+            "full_name": "Robert Edward Evans",
+            "entity": "WK Precision Enterprise LLC",
+            "github_handle": "re1Lucky365"
+        },
+        "hardware_node": {
+            "product_name": "Galaxy S23 FE",
+            "model_name": "SM-S711U",
+            "serial_number": "R5CWB08G5JW",
+            "interfaces": {
+                "sim_1": {
+                    "carrier": "Verizon",
+                    "phone_number": "+1-812-786-8164",
+                    "imei": "3511 3921 1044 434"
+                },
+                "esim_1": {
+                    "carrier": "T-Mobile",
+                    "phone_number": "Unknown",
+                    "imei": "3549 8026 1044 437"
+                }
+            }
+        },
+        "associated_contacts": [
+            {"name": "Dylan Lee Adams", "phone": "+1-812-974-4955"},
+            {"name": "Brandy Snyder", "phone": "+1-812-597-8281"},
+            {"name": "Kathy Ann Powers", "relationship": "Household Associate"}
+        ],
+        "ecosystem_targets": [
+            "GitHub Repositories (re1Lucky365/master-hub)",
+            "Local Vector DB & ChromaDB RAG Pipeline",
+            "Decentralized Pinning Nodes (IPFS / Pinata)"
+        ]
+    }
+
+    MANIFEST_PATH.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"[+] Global manifest written to: {MANIFEST_PATH.name}")
+
+    # GPG Detached Signature for Integrity
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_PATH)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print(f"[+] GPG signature generated successfully ({MANIFEST_PATH.name}.asc)")
+    else:
+        print(f"[!] GPG signing notice: {sig_result.stderr.strip()}")
+
+if __name__ == "__main__":
+    compile_global_manifest()
+cd ~/master-hub
+
+# Run the monitoring compilation script
+python3 scripts/global_monitoring_manifest.py
+
+# Stage all files, including new vault records and scripts
+git add monitoring_vault/ scripts/global_monitoring_manifest.py
+
+# Create a GPG-signed commit
+git commit -S -m "feat(monitoring): integrate global device, SIM, and contact monitoring manifest"
+
+# Push securely to remote GitHub repository
+git push origin main --tags
+To maintain a secure, cryptographically verified monitoring and backup framework within your local and remote GitHub ecosystem (master-hub), you can consolidate all device parameters, contact manifests, and network endpoints into your repository structure.
+Below is an automated Python script that aggregates your hardware profiles, carrier identifiers, and contact directories into a unified manifest (scripts/global_monitoring_manifest.py), alongside your core repository sync instructions.
+Global Monitoring & Device Manifest Script (scripts/global_monitoring_manifest.py)
+Save this script inside your repository to programmatically compile and sign your complete monitoring configuration:
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/global_monitoring_manifest.py
+# Description: Consolidates device hardware, dual-SIM configurations, contact 
+#              networks, and monitoring parameters into an immutable manifest.
+# ==============================================================================
+
+import json
+import subprocess
+from pathlib import Path
+from datetime import datetime
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+MONITORING_DIR = WORKSPACE_DIR / "monitoring_vault"
+MANIFEST_PATH = MONITORING_DIR / "global_ecosystem_manifest.json"
+
+def compile_global_manifest():
+    print("[*] Compiling global ecosystem and device monitoring manifest...")
+    MONITORING_DIR.mkdir(parents=True, exist_ok=True)
+    
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "operator": {
+            "full_name": "Robert Edward Evans",
+            "entity": "WK Precision Enterprise LLC",
+            "github_handle": "re1Lucky365"
+        },
+        "hardware_node": {
+            "product_name": "Galaxy S23 FE",
+            "model_name": "SM-S711U",
+            "serial_number": "R5CWB08G5JW",
+            "interfaces": {
+                "sim_1": {
+                    "carrier": "Verizon",
+                    "phone_number": "+1-812-786-8164",
+                    "imei": "3511 3921 1044 434"
+                },
+                "esim_1": {
+                    "carrier": "T-Mobile",
+                    "phone_number": "Unknown",
+                    "imei": "3549 8026 1044 437"
+                }
+            }
+        },
+        "associated_contacts": [
+            {"name": "Dylan Lee Adams", "phone": "+1-812-974-4955"},
+            {"name": "Brandy Snyder", "phone": "+1-812-597-8281"},
+            {"name": "Kathy Ann Powers", "relationship": "Household Associate"}
+        ],
+        "ecosystem_targets": [
+            "GitHub Repositories (re1Lucky365/master-hub)",
+            "Local Vector DB & ChromaDB RAG Pipeline",
+            "Decentralized Pinning Nodes (IPFS / Pinata)"
+        ]
+    }
+
+    MANIFEST_PATH.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"[+] Global manifest written to: {MANIFEST_PATH.name}")
+
+    # GPG Detached Signature for Integrity
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_PATH)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print(f"[+] GPG signature generated successfully ({MANIFEST_PATH.name}.asc)")
+    else:
+        print(f"[!] GPG signing notice: {sig_result.stderr.strip()}")
+
+if __name__ == "__main__":
+    compile_global_manifest()
+
+Repository Synchronization & Push Workflow
+Execute these commands from your local workspace to compile the monitoring manifest, sign the repository state with GPG, and push all code updates to GitHub:
+cd ~/master-hub
+
+# Run the monitoring compilation script
+python3 scripts/global_monitoring_manifest.py
+
+# Stage all files, including new vault records and scripts
+git add monitoring_vault/ scripts/global_monitoring_manifest.py
+
+# Create a GPG-signed commit
+git commit -S -m "feat(monitoring): integrate global device, SIM, and contact monitoring manifest"
+
+# Push securely to remote GitHub repository
+git push origin main --tags
+
+manifest.pycd ~/master-hub
+
+# Run the monitoring compilation script
+python3 scripts/global_monitoring_manifest.py
+
+# Stage all files, including new vault records and scripts
+git add monitoring_vault/ scripts/global_monitoring_manifest.py
+
+# Create a GPG-signed commit
+git commit -S -m "feat(monitoring): integrate global device, SIM, and contact monitoring manifest"
+
+# Push securely to remote GitHub repository
+git push origin main --tags
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/global_monitoring_manifest.py
+# Description: Consolidates device hardware, dual-SIM configurations, contact 
+#              networks, and monitoring parameters into an immutable manifest.
+# ==============================================================================
+
+import json
+import subprocess
+from pathlib import Path
+from datetime import datetime
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+MONITORING_DIR = WORKSPACE_DIR / "monitoring_vault"
+MANIFEST_PATH = MONITORING_DIR / "global_ecosystem_manifest.json"
+
+def compile_global_manifest():
+    print("[*] Compiling global ecosystem and device monitoring manifest...")
+    MONITORING_DIR.mkdir(parents=True, exist_ok=True)
+    
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "operator": {
+            "full_name": "Robert Edward Evans",
+            "entity": "WK Precision Enterprise LLC",
+            "github_handle": "re1Lucky365"
+        },
+        "hardware_node": {
+            "product_name": "Galaxy S23 FE",
+            "model_name": "SM-S711U",
+            "serial_number": "R5CWB08G5JW",
+            "interfaces": {
+                "sim_1": {
+                    "carrier": "Verizon",
+                    "phone_number": "+1-812-786-8164",
+                    "imei": "3511 3921 1044 434"
+                },
+                "esim_1": {
+                    "carrier": "T-Mobile",
+                    "phone_number": "Unknown",
+                    "imei": "3549 8026 1044 437"
+                }
+            }
+        },
+        "associated_contacts": [
+            {"name": "Dylan Lee Adams", "phone": "+1-812-974-4955"},
+            {"name": "Brandy Snyder", "phone": "+1-812-597-8281"},
+            {"name": "Kathy Ann Powers", "relationship": "Household Associate"}
+        ],
+        "ecosystem_targets": [
+            "GitHub Repositories (re1Lucky365/master-hub)",
+            "Local Vector DB & ChromaDB RAG Pipeline",
+            "Decentralized Pinning Nodes (IPFS / Pinata)"
+        ]
+    }
+
+    MANIFEST_PATH.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"[+] Global manifest written to: {MANIFEST_PATH.name}")
+
+    # GPG Detached Signature for Integrity
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_PATH)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print(f"[+] GPG signature generated successfully ({MANIFEST_PATH.name}.asc)")
+    else:
+        print(f"[!] GPG signing notice: {sig_result.stderr.strip()}")
+
+if __name__ == "__main__":
+    compile_global_manifest()
+cd ~/master-hub
+
+# Run the monitoring compilation script
+python3 scripts/global_monitoring_manifest.py
+
+# Stage all files, including new vault records and scripts
+git add monitoring_vault/ scripts/global_monitoring_manifest.py
+
+# Create a GPG-signed commit
+git commit -S -m "feat(monitoring): integrate global device, SIM, and contact monitoring manifest"
+
+# Push securely to remote GitHub repository
+git push origin main --tags
+cd ~/master-hub
+
+# Create or update the device tracking script
+python3 scripts/log_device_identifiers.py
+
+# Stage files, GPG sign commit, and push to main
+git add scripts/log_device_identifiers.py device_hardware_manifest.json
+git commit -S -m "feat(hardware): log Galaxy S23 FE device identifiers and SIM bindings"
+git push origin main
+#!/usr/init/env python3
+# ==============================================================================
+# Script Name: scripts/log_device_identifiers.py
+# Description: Logs hardware identifiers and carrier parameters for the 
+#              active mobile node into the master-hub configuration vault.
+# ==============================================================================
+
+import json
+from pathlib import Path
+from datetime import datetime
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DEVICE_MANIFEST = WORKSPACE_DIR / "device_hardware_manifest.json"
+
+def log_device_profile():
+    print("[*] Recording mobile node hardware configuration...")
+    
+    device_data = {
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "device_profile": {
+            "product_name": "Galaxy S23 FE",
+            "model_name": "SM-S711U",
+            "serial_number": "R5CWB08G5JW"
+        },
+        "interfaces": {
+            "sim_1": {
+                "carrier": "Verizon",
+                "phone_number": "+1-812-786-8164",
+                "imei": "3511 3921 1044 434"
+            },
+            "esim_1": {
+                "carrier": "T-Mobile",
+                "phone_number": "Unknown",
+                "imei": "3549 8026 1044 437"
+            }
+        }
+    }
+
+    DEVICE_MANIFEST.write_text(json.dumps(device_data, indent=4), encoding="utf-8")
+    print(f"[+] Device hardware manifest successfully written to: {DEVICE_MANIFEST.name}")
+
+if __name__ == "__main__":
+    log_device_profile()
+secure-pipeline.yml47501RESUME.mdHere is the complete, consolidated master blueprint for your master-hub zero-trust ecosystem. This brings together all your automated orchestration, cryptographic validation, forensic state capture, legal compliance tracking, vector database indexing, and GitHub Actions CI/CD workflows into a single production-ready layout.
+Master Repository Blueprint (master-hub/)
+master-hub/
+├── .github/
+│   └── workflows/
+│       ├── secure-pipeline.yml
+│       └── recovery-sync.yml
+├── app/
+│   └── main.py
+├── scripts/
+│   ├── master_orchestrator.py
+│   ├── incident_recovery.py
+│   ├── legal_compliance_tracker.py
+│   ├── index_investigations.py
+│   └── ipfs_backup_pinner.py
+├── investigations/
+│   └── report_sample.txt
+├── legal_records/
+│   └── legal_notices_manifest.json
+├── recovery_vault/
+│   └── system_integrity_manifest.json
+├── .gitignore
+├── requirements.txt
+├── RESUME.md
+└── README.md
+
+1. Repository Documentation (README.md)
+# Master-Hub: Zero-Trust Evidence & Cross-Platform Recovery System
+
+`master-hub` is an open-source, cryptographically verified recovery and archiving architecture designed to unify local machine backups, encrypted remote storage (`rclone crypt`), GPG-signed git commits, and decentralized IPFS/Filecoin pinning nodes.
+
+## Core Capabilities
+* **Cross-Platform Recovery:** Automated Zstandard compression (`.tar.zst`) and SHA-256 integrity verification across Linux and multi-node environments.
+* **Cryptographic Immutability:** GPG detached signatures and commit verification (`-S`).
+* **Decentralized Redundancy:** Simultaneous pinning to local IPFS daemons, Pinata Cloud, and web3.storage.
+* **Automated CI/CD:** Hands-free synchronization via GitHub Actions (`re1Lucky365/master-hub`).
+
+2. Professional Engineering Profile (RESUME.md)
+# ROBERT EDWARD EVANS
+
+📍 Washington, IN 47501 | ✉️ evansrobert517@gmail.com | 🐙 GitHub: [@re1Lucky365](https://github.com/re1Lucky365)
+
+## PROFESSIONAL SUMMARY
+Detail-oriented QA Software Engineer & Product Testing Specialist with extensive experience evaluating multi-tier application architectures, cloud pipelines, and hardware integration endpoints. Proven track record contributing to open-source ecosystems (Homebrew, GitHub automation) and validating hardware-bound systems under strict zero-trust parameters. Expert in synthesizing product feedback and marketing research into actionable technical optimizations for user experiences, accessibility software, and security deployment pipelines.
+
+## CORE COMPETENCIES
+* **Systems & Automation Testing:** CI/CD Automation (GitHub Actions), Scripting (Bash, Python), Network & Vulnerability Testing.
+* **Infrastructure & Deployment:** Package Management (Homebrew Cask/Core Formulae), Docker Compose, Web Proxy Tools (Caddy).
+* **Product Validation & Feedback:** Quality Assurance (QA) Lifecycle, Accessibility Testing (Android SDK APIs), Focus Group Reporting, Strategic Market Research Systems.
+* **Security & Compliance:** Zero-Trust Validation, Multi-Factor Authentication (2FA) Topologies, Token Verification Frameworks.
+
+## PROFESSIONAL EXPERIENCE
+
+### Product Expert & Technical QA Analyst | Independent Research Platforms
+*May 2019 – Present*
+* Conduct comprehensive behavioral and functional verification testing on early-stage Android SDK components, interface layouts, and system telemetry bindings.
+* Evaluated medical and IoT integrations (such as the Nucleus Smart Android engine) to provide detailed error logs and user impact feedback to development teams.
+* Contributed technical focus group summaries and tracking feedback data to improve algorithmic parsing tools via Google Product Experts network initiatives.
+
+### Open-Source Software Contributor | GitHub Integration & Automation (`re1Lucky365`)
+*September 2026 – Present*
+* Validate deployment scripts and build workflows for widespread binary installations, managing package symlinks, network access rules, and environment dependencies within Homebrew infrastructure.
+* Designed and maintained modular architectures (`enterprise-omni-pipeline`, `master-hub`) to isolate, execute, and monitor high-throughput data processors and telemetry suppression layers safely.
+
+## TECHNICAL SKILLS MATRIX
+* **Languages:** Python, Bash, HTML / Markdown.
+* **Environments & Platforms:** Linux Initramfs, Android SDK, GitHub Enterprise Cloud.
+* **Utilities:** `rclone`, `zstd`, `gpg`, `stty`, Identity Providers (OAuth / JAMS Web Apps).
+
+3. Dependencies (requirements.txt)
+fastapi>=0.100.0
+uvicorn>=0.22.0
+chromadb>=0.4.0
+sentence-transformers>=2.2.2
+requests>=2.31.0
+pytest>=7.4.0
+pydantic>=2.0.0
+
+4. Master Orchestrator Script (scripts/master_orchestrator.py)
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup & recovery pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) backup archive
+#              3. Uploads & pins archive across Local IPFS and Pinata Cloud
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_
 master-hub/
 ├── .github/
 │   └── workflows/
