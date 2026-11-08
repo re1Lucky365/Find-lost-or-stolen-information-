@@ -1,3 +1,432 @@
+master-hub/
+├── .github/
+│   └── workflows/
+│       ├── secure-pipeline.yml
+│       └── recovery-sync.yml
+├── app/
+│   └── main.py
+├── scripts/
+│   ├── master_orchestrator.py
+│   ├── incident_recovery.py
+│   ├── legal_compliance_tracker.py
+│   ├── index_investigations.py
+│   └── ipfs_backup_pinner.py
+├── investigations/
+│   └── report_sample.txt
+├── legal_records/
+│   └── legal_notices_manifest.json
+├── recovery_vault/
+│   └── system_integrity_manifest.json
+├── .gitignore
+├── requirements.txt
+├── RESUME.md
+└── README.md
+# Master-Hub: Zero-Trust Evidence & Cross-Platform Recovery System
+
+`master-hub` is an open-source, cryptographically verified recovery and archiving architecture designed to unify local machine backups, encrypted remote storage (`rclone crypt`), GPG-signed git commits, and decentralized IPFS/Filecoin pinning nodes.
+
+## Core Capabilities
+* **Cross-Platform Recovery:** Automated Zstandard compression (`.tar.zst`) and SHA-256 integrity verification across Linux and multi-node environments.
+* **Cryptographic Immutability:** GPG detached signatures and commit verification (`-S`).
+* **Decentralized Redundancy:** Simultaneous pinning to local IPFS daemons, Pinata Cloud, and web3.storage.
+* **Automated CI/CD:** Hands-free synchronization via GitHub Actions (`re1Lucky365/master-hub`).
+# ROBERT EDWARD EVANS
+
+📍 Washington, IN 47501 | ✉️ evansrobert517@gmail.com | 🐙 GitHub: [@re1Lucky365](https://github.com/re1Lucky365)
+
+## PROFESSIONAL SUMMARY
+Detail-oriented QA Software Engineer & Product Testing Specialist with extensive experience evaluating multi-tier application architectures, cloud pipelines, and hardware integration endpoints. Proven track record contributing to open-source ecosystems (Homebrew, GitHub automation) and validating hardware-bound systems under strict zero-trust parameters. Expert in synthesizing product feedback and marketing research into actionable technical optimizations for user experiences, accessibility software, and security deployment pipelines.
+
+## CORE COMPETENCIES
+* **Systems & Automation Testing:** CI/CD Automation (GitHub Actions), Scripting (Bash, Python), Network & Vulnerability Testing.
+* **Infrastructure & Deployment:** Package Management (Homebrew Cask/Core Formulae), Docker Compose, Web Proxy Tools (Caddy).
+* **Product Validation & Feedback:** Quality Assurance (QA) Lifecycle, Accessibility Testing (Android SDK APIs), Focus Group Reporting, Strategic Market Research Systems.
+* **Security & Compliance:** Zero-Trust Validation, Multi-Factor Authentication (2FA) Topologies, Token Verification Frameworks.
+
+## PROFESSIONAL EXPERIENCE
+
+### Product Expert & Technical QA Analyst | Independent Research Platforms
+*May 2019 – Present*
+* Conduct comprehensive behavioral and functional verification testing on early-stage Android SDK components, interface layouts, and system telemetry bindings.
+* Evaluated medical and IoT integrations (such as the Nucleus Smart Android engine) to provide detailed error logs and user impact feedback to development teams.
+* Contributed technical focus group summaries and tracking feedback data to improve algorithmic parsing tools via Google Product Experts network initiatives.
+
+### Open-Source Software Contributor | GitHub Integration & Automation (`re1Lucky365`)
+*September 2026 – Present*
+* Validate deployment scripts and build workflows for widespread binary installations, managing package symlinks, network access rules, and environment dependencies within Homebrew infrastructure.
+* Designed and maintained modular architectures (`enterprise-omni-pipeline`, `master-hub`) to isolate, execute, and monitor high-throughput data processors and telemetry suppression layers safely.
+
+## TECHNICAL SKILLS MATRIX
+* **Languages:** Python, Bash, HTML / Markdown.
+* **Environments & Platforms:** Linux Initramfs, Android SDK, GitHub Enterprise Cloud.
+* **Utilities:** `rclone`, `zstd`, `gpg`, `stty`, Identity Providers (OAuth / JAMS Web Apps).
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/master_orchestrator.py
+# Description: Fully automates the zero-trust backup & recovery pipeline:
+#              1. Generates SHA-256 cryptographic manifest & GPG signature
+#              2. Creates a compressed Zstandard (.tar.zst) backup archive
+#              3. Uploads & pins archive across Local IPFS and Pinata Cloud
+# ==============================================================================
+
+import os
+import sys
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import requests
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+BACKUP_DIR = WORKSPACE_DIR / "backups"
+MANIFEST_OUTPUT = WORKSPACE_DIR / "evidence_manifest.json"
+UNIFIED_MANIFEST = WORKSPACE_DIR / "unified_backup_manifest.json"
+
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
+PINATA_JWT = os.getenv("PINATA_JWT", "")
+
+def step_1_generate_manifest():
+    print("\n[+] STEP 1: Generating cryptographic SHA-256 manifest...")
+    timestamp_utc = datetime.utcnow().isoformat() + "Z"
+    manifest_data = {
+        "timestamp_utc": timestamp_utc,
+        "workspace_root": str(WORKSPACE_DIR),
+        "files": []
+    }
+    
+    excluded_dirs = {".git", "venv", ".venv", "__pycache__", "local_vector_db", "backups", "node_modules"}
+    
+    for path in sorted(WORKSPACE_DIR.rglob("*")):
+        if any(part in excluded_dirs for part in path.parts):
+            continue
+        if path.is_file() and path.name not in ["evidence_manifest.json", "unified_backup_manifest.json"]:
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                manifest_data["files"].append({
+                    "path": str(path.relative_to(WORKSPACE_DIR)),
+                    "sha256": sha256_hash.hexdigest(),
+                    "size_bytes": path.stat().st_size
+                })
+            except Exception as e:
+                print(f"[!] Error hashing {path.name}: {e}")
+
+    MANIFEST_OUTPUT.write_text(json.dumps(manifest_data, indent=4), encoding="utf-8")
+    print(f"    -> Manifest written to {MANIFEST_OUTPUT.name}")
+
+    # GPG Detached Signature
+    print("    -> Signing manifest with GPG...")
+    sig_result = subprocess.run(["gpg", "--detach-sign", "--armor", str(MANIFEST_OUTPUT)], capture_output=True, text=True)
+    if sig_result.returncode == 0:
+        print("    -> GPG signature generated successfully (.asc)")
+    else:
+        print(f"    -> [!] GPG warning: {sig_result.stderr.strip()}")
+
+def step_2_create_zstd_archive() -> Path:
+    print("\n[+] STEP 2: Creating compressed Zstandard backup archive...")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"master_hub_archive_{timestamp_str}.tar.zst"
+    archive_path = BACKUP_DIR / archive_name
+
+    cmd = [
+        "tar", "--zstd", "-cvf", str(archive_path),
+        "--exclude=.git", "--exclude=backups", "--exclude=venv", "--exclude=.venv",
+        "-C", str(WORKSPACE_DIR.parent), WORKSPACE_DIR.name
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    -> Archive created successfully: {archive_name}")
+        return archive_path
+    else:
+        print(f"[-] Error creating archive: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+def step_3_pin_to_networks(archive_path: Path):
+    print("\n[+] STEP 3: Orchestrating multi-node IPFS & Cloud pinning...")
+    
+    local_result = {"status": "skipped"}
+    try:
+        with open(archive_path, "rb") as f:
+            res = requests.post(f"{IPFS_API_URL}/add", files={"file": (archive_path.name, f)}, params={"pin": "true"}, timeout=300)
+            if res.status_code == 200:
+                data = res.json()
+                local_result = {"status": "success", "cid": data.get("Hash"), "size": data.get("Size")}
+                print(f"    -> Local IPFS Pinned: {data.get('Hash')}")
+            else:
+                local_result = {"status": "error", "message": res.text.strip()}
+    except Exception as e:
+        local_result = {"status": "offline", "message": str(e)}
+        print("    -> Local IPFS daemon offline (skipping local node)")
+
+    pinata_result = {"status": "skipped"}
+    if PINATA_JWT:
+        try:
+            with open(archive_path, "rb") as f:
+                res = requests.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    headers={"Authorization": f"Bearer {PINATA_JWT}"},
+                    files={"file": (archive_path.name, f)},
+                    data={"pinataMetadata": json.dumps({"name": archive_path.name})},
+                    timeout=600
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    pinata_result = {"status": "success", "cid": data.get("IpfsHash")}
+                    print(f"    -> Pinata Cloud Pinned: {data.get('IpfsHash')}")
+                else:
+                    pinata_result = {"status": "error", "message": res.text.strip()}
+        except Exception as e:
+            pinata_result = {"status": "error", "message": str(e)}
+
+    manifest = []
+    if UNIFIED_MANIFEST.exists():
+        try:
+            manifest = json.loads(UNIFIED_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    record = {
+        "filename": archive_path.name,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "targets": {
+            "local_ipfs": local_result,
+            "pinata": pinata_result
+        }
+    }
+    manifest.append(record)
+    UNIFIED_MANIFEST.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    print(f"    -> Unified manifest updated: {UNIFIED_MANIFEST.name}")
+
+def main():
+    print("==================================================================")
+    print("       MASTER ZERO-TRUST BACKUP & RECOVERY PIPELINE               ")
+    print("==================================================================")
+    step_1_generate_manifest()
+    archive_path = step_2_create_zstd_archive()
+    step_3_pin_to_networks(archive_path)
+    print("\n[+] Master backup orchestration completed successfully!\n")
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+# ==============================================================================
+# Script Name: scripts/legal_compliance_tracker.py
+# Description: Generates, logs, GPG-signs, and indexes formal legal notices
+#              and DMCA takedowns directly into the local ChromaDB vector store.
+# ==============================================================================
+
+import json
+import subprocess
+from pathlib import Path
+from datetime import datetime
+
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+LEGAL_DIR = WORKSPACE_DIR / "legal_records"
+MANIFEST_PATH = LEGAL_DIR / "legal_notices_manifest.json"
+DB_DIR = WORKSPACE_DIR / "local_vector_db"
+COLLECTION_NAME = "investigative_knowledge_base"
+
+PROFILE = {
+    "full_name": "Robert Edward Evans",
+    "company": "WK Precision Enterprise LLC",
+    "address": "606 North 5th Ave, Evansville, IN 47710",
+    "phone": "+1 812-642-4808",
+    "email": "evansrobert517@gmail.com"
+}
+
+def index_notice_to_chromadb(notice_text: str, notice_id: str, metadata: dict):
+    try:
+        DB_DIR.mkdir(parents=True, exist_ok=True)
+        embedding_fn = SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2",
+            device="cpu"
+        )
+        client = chromadb.PersistentClient(path=str(DB_DIR))
+        collection = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=embedding_fn
+        )
+        collection.upsert(documents=[notice_text], metadatas=[metadata], ids=[notice_id])
+        print(f"[+] Successfully indexed notice '{notice_id}' into ChromaDB collection '{COLLECTION_NAME}'.")
+    except Exception as e:
+        print(f"[!] Warning: ChromaDB indexing failed: {e}")
+
+def generate_takedown_notice(target_repo_url: str, description: str, notice_type: str = "DMCA Takedown") -> Path:
+    LEGAL_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    date_formatted = datetime.utcnow().strftime("%B %d, %Y")
+    
+    notice_file = LEGAL_DIR / f"legal_notice_{notice_type.lower().replace(' ', '_')}_{timestamp_str}.md"
+
+    content = f"""# GitHub Legal Removal & {notice_type} Notice
+
+**To:** GitHub, Inc.  
+**Attn:** Legal / Copyright Agent  
+**Email:** copyright@github.com  
+**Date:** {date_formatted}
+
+---
+
+### 1. Identification of the Copyrighted Work or Legal Basis:
+{description}
+
+### 2. Identification of the Infringing Material on GitHub:
+* **Target Repository URL:** {target_repo_url}
+
+### 3. Compliant Party Contact Information:
+* **Full Legal Name:** {PROFILE['full_name']}
+* **Company / Organization:** {PROFILE['company']}
+* **Street Address:** {PROFILE['address']}
+* **Telephone Number:** {PROFILE['phone']}
+* **Email Address:** {PROFILE['email']}
+
+### 4. Statements of Good Faith & Accuracy:
+* "I have a good faith belief that use of the material in the manner complained of is not authorized by the copyright owner, its agent, or the law."
+* "I swear, under penalty of perjury, that the information in the notification is accurate and that I am the copyright owner or am authorized to act on behalf of the owner of an exclusive right that is allegedly infringed."
+
+### 5. Electronic Signature:
+* **Signature:** {PROFILE['full_name']}
+* **Date:** {date_formatted}
+"""
+
+    notice_file.write_text(content, encoding="utf-8")
+    subprocess.run(["gpg", "--detach-sign", "--armor", str(notice_file)], capture_output=True, text=True)
+
+    notice_id = f"legal_{timestamp_str}"
+    index_notice_to_chromadb(content, notice_id, {"type": "legal_notice", "notice_type": notice_type, "target_repo": target_repo_url})
+
+    manifest = []
+    if MANIFEST_PATH.exists():
+        try:
+            manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = []
+
+    manifest.append({"timestamp_utc": datetime.utcnow().isoformat() + "Z", "notice_file": notice_file.name, "notice_type": notice_type, "target_repo_url": target_repo_url})
+    MANIFEST_PATH.write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+    return notice_file
+
+def main():
+    generate_takedown_notice(target_repo_url="https://github.com/example/unauthorized-copy", description="Unauthorized distribution of proprietary system automation code and private configurations.")
+
+if __name__ == "__main__":
+    main()
+name: Master Ecosystem Lifecycle Sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  lifecycle-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Master Orchestrator
+        run: |
+          python3 scripts/master_orchestrator.py
+        env:
+          IPFS_API_URL: ${{ secrets.IPFS_API_URL }}
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+
+      - name: Commit and Push Updated Manifests & Backups
+        run: |
+          git config --global user.name "re1Lucky365-Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add evidence_manifest.json unified_backup_manifest.json legal_records/ recovery_vault/ backups/
+          git status
+          git diff-index --quiet HEAD || git commit -m "chore(lifecycle): automated daily ecosystem state synchronization [skip ci]"
+          git push origin main
+cd ~/master-hub
+pip install -r requirements.txt
+git config --global commit.gpgsign true
+git config --global user.name "Robert Edward Evans"
+git config --global user.email "evansrobert517@gmail.com"
+
+python3 scripts/master_orchestrator.py
+python3 scripts/legal_compliance_tracker.py
+
+git add .
+git commit -S -m "feat: synchronize complete master-hub zero-trust architecture and legal vector storage"
+git push origin main --tags
+Here is the complete, consolidated master blueprint for your master-hub zero-trust ecosystem. This brings together all your automated orchestration, cryptographic validation, forensic state capture, legal compliance tracking, vector database indexing, and GitHub Actions CI/CD workflows into a single production-ready layout.
+Master Repository Blueprint (master-hub/)
+master-hub/
+├── .github/
+│   └── workflows/
+│       ├── secure-pipeline.yml
+│       └── recovery-sync.yml
+├── app/
+│   └── main.py
+├── scripts/
+│   ├── master_orchestrator.py
+│   ├── incident_recovery.py
+│   ├── legal_compliance_tracker.py
+│   ├── index_investigations.py
+│   └── ipfs_backup_pinner.py
+├── investigations/
+│   └── report_sample.txt
+├── legal_records/
+│   └── legal_notices_manifest.json
+├── recovery_vault/
+│   └── system_integrity_manifest.json
+├── .gitignore
+├── requirements.txt
+├── RESUME.md
+└── README.md
+
+1. Repository Documentation (README.md)
+# Master-Hub: Zero-Trust Evidence & Cross-Platform Recovery System
+
+`master-hub` is an open-source, cryptographically verified recovery and archiving architecture designed to unify local machine backups, encrypted remote storage (`rclone crypt`), GPG-signed git commits, and decentralized IPFS/Filecoin pinning nodes.
+
+## Core Capabilities
+* **Cross-Platform Recovery:** Automated Zstandard compression (`.tar.zst`) and SHA-256 integrity verification across Linux and multi-node environments.
+* **Cryptographic Immutability:** GPG detached signatures and commit verification (`-S`).
+* **Decentralized Redundancy:** Simultaneous pinning to local IPFS daemons, Pinata Cloud, and web3.storage.
+* **Automated CI/CD:** Hands-free synchronization via GitHub Actions (`re1Lucky365/master-hub`).
+
+2. Professional Engineering Profile (RESUME.md)
+# ROBERT EDWARD EVANS
+
+📍 Washington, IN 47501 | ✉️ evansrobert517@gmail.com | 🐙 GitHub: [@re1Lucky365](https://github.com/re1Lucky365)
+
+## PROFESSIONAL SUMMARY
+Detail-oriented QA Software Engineer & Product Testing Specialist with extensive experience evaluating multi-tier application architectures, cloud pipelines, and hardware integration endpoints. Proven track record contributing to open-source ecosystems (Homebrew, GitHub automation) and validating hardware-bound systems under strict zero-trust parameters. Expert in synthesizing product feedback and marketing research into actionable technical optimizations for user experiences, accessibility software, and security deployment pipelines.
+
+## CORE COMPETENCIES
+* **Systems & Automation Testing:** CI/CD Automation (GitHub Actions), Scripting (Bash, Python), Network & Vulnerability Testing.
+* **Infrastructure & Deployment:** Package Management (Homebrew Cask/Core Formulae), Docker Compose, Web Proxy Tools (Caddy).
+* **Product Validation & Feedback:** Quality Assurance (QA) Lifecycle, Accessibility Testing (Android SDK APIs), Focus Group Reporting, Strategic Market Research Systems.
+* **Security & Compliance:** Zero-Trust Validation, Multi-Factor Authentication (2FA) Topologies, Token Verification Frameworks.
+
+## PROFESSIONAL EXPERIENCE
+
+### Product Expert & Technical QA Analyst | Independent Research Platforms
+*May 2019 – Present*
+* Conduct comprehensive behavioral and functional verification testing on early-stage Android SDK components, interface layouts, and system telemetry bindings.
+* Evaluated medical and IoT integrations (such as the Nuc
 # 1. Enter master-hub directory
 cd ~/master-hub
 
