@@ -258,6 +258,266 @@ def verify_all():
 
 if __name__ == "__main__":
     cli()
+-reclamation-vault/repo-4000-years
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml
+├── scripts/
+│   ├── sign_and_bundle.sh
+│   └── ingest_artifact.sh
+├── src/
+│   ├── schema.py
+│   ├── notice_generator.py
+│   └── cli.py
+├── requirements.txt
+├── Makefile
+└── README.md
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("vault_store/reclamation.db")
+
+def init_database():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS locked_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL,
+            category TEXT NOT NULL,
+            handle_or_account TEXT NOT NULL,
+            associated_email TEXT,
+            lockout_timestamp TEXT NOT NULL,
+            last_contact_date TEXT NOT NULL,
+            notes TEXT,
+            status TEXT DEFAULT 'CONTESTED'
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS evidence_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER,
+            file_path TEXT NOT NULL,
+            sha256_hash TEXT NOT NULL,
+            ingested_at TEXT NOT NULL,
+            description TEXT,
+            FOREIGN KEY (account_id) REFERENCES locked_accounts(id)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    init_database()
+    print("[OK] Reclamation database initialized successfully.")
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, TikTok, Cash App)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli()
 verify-vault-integrity.ymlaccount-reclamation-vault/
 ├── .github/
 │   └── workflows/
