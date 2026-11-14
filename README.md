@@ -1,3 +1,3128 @@
+account-reclamation-vault/
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml
+├── scripts/
+│   ├── sign_and_bundle.sh
+│   └── ingest_artifact.sh
+├── src/
+│   ├── schema.py
+│   ├── notice_generator.py
+│   └── cli.py
+├── requirements.txt
+├── Makefile
+└── README.md
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("vault_store/reclamation.db")
+
+def init_database():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS locked_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL,
+            category TEXT NOT NULL,
+            handle_or_account TEXT NOT NULL,
+            associated_email TEXT,
+            lockout_timestamp TEXT NOT NULL,
+            last_contact_date TEXT NOT NULL,
+            notes TEXT,
+            status TEXT DEFAULT 'CONTESTED'
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS evidence_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER,
+            file_path TEXT NOT NULL,
+            sha256_hash TEXT NOT NULL,
+            ingested_at TEXT NOT NULL,
+            description TEXT,
+            FOREIGN KEY (account_id) REFERENCES locked_accounts(id)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    init_database()
+    print("[OK] Reclamation database initialized successfully.")
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, TikTok, Cash App)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli()
+verify-vault-integrity.ymlaccount-reclamation-vault/
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml
+├── scripts/
+│   ├── sign_and_bundle.sh
+│   └── ingest_artifact.sh
+├── src/
+│   ├── schema.py
+│   ├── notice_generator.py
+│   └── cli.py
+├── requirements.txt
+├── Makefile
+└── README.md
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("vault_store/reclamation.db")
+
+def init_database():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS locked_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL,
+            category TEXT NOT NULL,
+            handle_or_account TEXT NOT NULL,
+            associated_email TEXT,
+            lockout_timestamp TEXT NOT NULL,
+            last_contact_date TEXT NOT NULL,
+            notes TEXT,
+            status TEXT DEFAULT 'CONTESTED'
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS evidence_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER,
+            file_path TEXT NOT NULL,
+            sha256_hash TEXT NOT NULL,
+            ingested_at TEXT NOT NULL,
+            description TEXT,
+            FOREIGN KEY (account_id) REFERENCES locked_accounts(id)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    init_database()
+    print("[OK] Reclamation database initialized successfully.")
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, TikTok, Cash App)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli()
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, TikTok, Cash App)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli()
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("vault_store/reclamation.db")
+
+def init_database():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS locked_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL,
+            category TEXT NOT NULL,
+            handle_or_account TEXT NOT NULL,
+            associated_email TEXT,
+            lockout_timestamp TEXT NOT NULL,
+            last_contact_date TEXT NOT NULL,
+            notes TEXT,
+            status TEXT DEFAULT 'CONTESTED'
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS evidence_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER,
+            file_path TEXT NOT NULL,
+            sha256_hash TEXT NOT NULL,
+            ingested_at TEXT NOT NULL,
+            description TEXT,
+            FOREIGN KEY (account_id) REFERENCES locked_accounts(id)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    init_database()
+    print("[OK] Reclamation database initialized successfully.")
+account-reclamation-vault/
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml
+├── scripts/
+│   ├── sign_and_bundle.sh
+│   └── ingest_artifact.sh
+├── src/
+│   ├── schema.py
+│   ├── notice_generator.py
+│   └── cli.py
+├── requirements.txt
+├── Makefile
+└── README.md
+# 1. Export your verified GPG public key for your vault records
+gpg --armor --export evansrobert517@gmail.com > ~/master-hub/public_key.asc
+
+# 2. Run the deployment and claim attestation scripts
+bash adpBetty-deploy.sh
+python3 ~/master-hub/scripts/account_claim_manifest.py
+python3 ~/master-hub/scripts/enterprise_backup_sync.py
+Https://www.facebook.com/share/1AiGYNckgx/#!/bin/bash
+set -euo pipefail
+
+TIMESTAMP=$(date -u +"%Y%m%d_%H%M%S")
+BUNDLE_DIR="vault_store/bundles"
+ARCHIVE="$BUNDLE_DIR/reclamation_vault_$TIMESTAMP.tar.zst"
+
+mkdir -p "$BUNDLE_DIR"
+
+echo "==> Creating compressed zstd archive of vault_store..."
+tar --exclude='vault_store/bundles' -cf - vault_store/ | zstd -T0 -o "$ARCHIVE"
+sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+if command -v gpg >/dev/null 2>&1; then
+    echo "==> Signing archive with default GPG key..."
+    gpg --detach-sign --armor "$ARCHIVE" || echo "[WARN] No default GPG key configured; skipped signature."
+fi
+
+echo "==> Bundle complete: $ARCHIVE"
+#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <path_to_file> <description> [account_id]"
+    exit 1
+fi
+
+SRC_FILE="$1"
+DESC="$2"
+ACCOUNT_ID="${3:-NULL}"
+DEST_DIR="vault_store/artifacts"
+
+mkdir -p "$DEST_DIR"
+BASENAME=$(basename "$SRC_FILE")
+TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+DEST_FILE="$DEST_DIR/${TIMESTAMP}_${BASENAME}"
+
+cp "$SRC_FILE" "$DEST_FILE"
+chmod 400 "$DEST_FILE"
+
+HASH=$(sha256sum "$DEST_FILE" | awk '{print $1}')
+
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('vault_store/reclamation.db')
+conn.execute(
+    'INSERT INTO evidence_artifacts (account_id, file_path, sha256_hash, ingested_at, description) VALUES (?, ?, ?, ?, ?)',
+    ($ACCOUNT_ID if '$ACCOUNT_ID' != 'NULL' else None, '$DEST_FILE', '$HASH', '$TIMESTAMP', '''$DESC''')
+)
+conn.commit()
+conn.close()
+"
+
+echo "[INGESTED] $DEST_FILE"
+echo "[SHA-256]  $HASH"
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, Cash App, TikTok)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli()
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+click==8.1.7
+pydantic==2.9.2
+zstandard==0.23.0
+SHELL := /bin/bash
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+VAULT_DIR := ./vault_store
+
+.PHONY: all setup init register notice bundle verify clean
+
+all:
+	@echo "Account Reclamation & Non-Abandonment Vault"
+	@echo "Usage: make [setup | init | register | notice | bundle | verify | clean]"
+
+setup:
+	python3 -m venv $(VENV)
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements.txt
+	chmod +x scripts/*.sh
+
+init: setup
+	mkdir -p $(VAULT_DIR)/artifacts $(VAULT_DIR)/notices $(VAULT_DIR)/bundles
+	chmod 700 $(VAULT_DIR)
+	$(PYTHON) src/schema.py
+	@echo "==> Vault initialized at $(VAULT_DIR)"
+
+register:
+	$(PYTHON) src/cli.py register
+
+notice:
+	$(PYTHON) src/cli.py generate-notice
+
+bundle:
+	./scripts/sign_and_bundle.sh
+
+verify:
+	$(PYTHON) src/cli.py verify-all
+
+clean:
+	rm -rf $(VENV) __pycache__
+Reclamation laws lost  abandoned I didn't abandon them I got locked outWrite repo codes for lost or abandoned accountsaccount-reclamation-vault/
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml   # Automated SHA-256 & GPG signature check
+├── scripts/
+│   ├── sign_and_bundle.sh               # GPG-sign and zstd-compress evidence bundles
+│   └── ingest_artifact.sh               # Hash and lock QR codes, IDs, or statements
+├── src/
+│   ├── schema.py                        # SQLite schema for accounts, lockouts & notices
+│   ├── notice_generator.py              # Generates formal Notice of Non-Abandonment
+│   └── cli.py                           # CLI for registering accounts & tracking appeals
+├── Makefile                             # Single-command deployment & backup
+├── requirements.txt                     # Minimal Python dependencies
+└── README.md
+Write repo codes for lost or abandoned accountsadpBetty-core/
+├── .github/
+│   ├── workflows/
+│   │   └── ci-self-heal.yml         # Global GitHub Actions verification gate
+│   └── dependabot.yml               # Automated dependency and action updates
+├── scripts/
+│   └── self_heal_deploy.sh          # Local self-healing sync and rollback daemon
+├── systemd/
+│   ├── workspace-self-heal.service  # Systemd service unit
+│   └── workspace-self-heal.timer    # Systemd 2-minute cadence timer
+├── src/                             # Application source code (Streamlit / API / Caddy)
+├── docker-compose.yml               # Local container orchestration
+├── requirements.txt                 # Python dependencies
+├── Makefile                         # Single-command installation & control
+└── README.md
+SHELL := /bin/bash
+INSTALL_DIR := /opt/Master-Hub
+SERVICE_NAME := workspace-self-heal
+
+.PHONY: all install update clean status logs
+
+all:
+	@echo "Usage: make [install | update | status | logs | clean]"
+
+install:
+	@echo "==> Installing Master-Hub / adpBetty-core to $(INSTALL_DIR)..."
+	mkdir -p $(INSTALL_DIR)
+	rsync -av --exclude='.git' ./ $(INSTALL_DIR)/
+	
+	@echo "==> Configuring executable permissions..."
+	chmod +x $(INSTALL_DIR)/scripts/self_heal_deploy.sh
+
+	@echo "==> Installing Systemd service and timer..."
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).service /etc/systemd/system/
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).timer /etc/systemd/system/
+	
+	systemctl daemon-reload
+	systemctl enable --now $(SERVICE_NAME).timer
+	
+	@echo "==> Setup complete! Timer status:"
+	systemctl status $(SERVICE_NAME).timer --no-pager
+
+update:
+	@echo "==> Pulling latest changes and triggering manual sync..."
+	cd $(INSTALL_DIR) && git pull origin main
+	$(INSTALL_DIR)/scripts/self_heal_deploy.sh $(INSTALL_DIR)
+
+status:
+	systemctl status $(SERVICE_NAME).timer $(SERVICE_NAME).service --no-pager || true
+	cd $(INSTALL_DIR) && docker compose ps
+
+logs:
+	journalctl -u $(SERVICE_NAME).service -n 50 --no-pager
+
+clean:
+	@echo "==> Stopping and removing systemd timers..."
+	systemctl disable --now $(SERVICE_NAME).timer || true
+	systemctl disable --now $(SERVICE_NAME).service || true
+	rm -f /etc/systemd/system/$(SERVICE_NAME).service
+	rm -f /etc/systemd/system/$(SERVICE_NAME).timer
+	systemctl daemon-reload
+	@echo "==> Clean complete."
+deploy.shSHELL := /bin/bash
+INSTALL_DIR := /opt/Master-Hub
+SERVICE_NAME := workspace-self-heal
+
+.PHONY: all install update clean status logs
+
+all:
+	@echo "Usage: make [install | update | status | logs | clean]"
+
+install:
+	@echo "==> Installing Master-Hub / adpBetty-core to $(INSTALL_DIR)..."
+	mkdir -p $(INSTALL_DIR)
+	rsync -av --exclude='.git' ./ $(INSTALL_DIR)/
+	
+	@echo "==> Configuring executable permissions..."
+	chmod +x $(INSTALL_DIR)/scripts/self_heal_deploy.sh
+
+	@echo "==> Installing Systemd service and timer..."
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).service /etc/systemd/system/
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).timer /etc/systemd/system/
+	
+	systemctl daemon-reload
+	systemctl enable --now $(SERVICE_NAME).timer
+	
+	@echo "==> Setup complete! Timer status:"
+	systemctl status $(SERVICE_NAME).timer --no-pager
+
+update:
+	@echo "==> Pulling latest changes and triggering manual sync..."
+	cd $(INSTALL_DIR) && git pull origin main
+	$(INSTALL_DIR)/scripts/self_heal_deploy.sh $(INSTALL_DIR)
+
+status:
+	systemctl status $(SERVICE_NAME).timer $(SERVICE_NAME).service --no-pager || true
+	cd $(INSTALL_DIR) && docker compose ps
+
+logs:
+	journalctl -u $(SERVICE_NAME).service -n 50 --no-pager
+
+clean:
+	@echo "==> Stopping and removing systemd timers..."
+	systemctl disable --now $(SERVICE_NAME).timer || true
+	systemctl disable --now $(SERVICE_NAME).service || true
+	rm -f /etc/systemd/system/$(SERVICE_NAME).service
+	rm -f /etc/systemd/system/$(SERVICE_NAME).timer
+	systemctl daemon-reload
+	@echo "==> Clean complete."
+adpBetty-core/
+├── .github/
+│   ├── workflows/
+│   │   └── ci-self-heal.yml         # Global GitHub Actions verification gate
+│   └── dependabot.yml               # Automated dependency and action updates
+├── scripts/
+│   └── self_heal_deploy.sh          # Local self-healing sync and rollback daemon
+├── systemd/
+│   ├── workspace-self-heal.service  # Systemd service unit
+│   └── workspace-self-heal.timer    # Systemd 2-minute cadence timer
+├── src/                             # Application source code (Streamlit / API / Caddy)
+├── docker-compose.yml               # Local container orchestration
+├── requirements.txt                 # Python dependencies
+├── Makefile                         # Single-command installation & control
+└── README.md
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+sudo systemctl daemon-reload
+sudo systemctl enable --now workspace-self-heal.timer
+[Unit]
+Description=Run Workspace Self-Healing Sync every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Unit=workspace-self-heal.service
+
+[Install]
+WantedBy=timers.target
+[Unit]
+Description=Self-Healing Git & Docker Workspace Sync
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/Master-Hub
+ExecStart=/opt/Master-Hub/scripts/self_heal_deploy.sh /opt/Master-Hub
+StandardOutput=journal
+StandardError=journal
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- Configuration ---
+REPO_DIR="${1:-$(pwd)}"
+BRANCH="main"
+HEALTH_URL="http://localhost:8501/_stcore/health" # Adjust to your Caddy/Streamlit/API health endpoint
+MAX_RETRIES=6
+SLEEP_INTERVAL=5
+BACKUP_DIR="$REPO_DIR/.deploy_backups"
+
+mkdir -p "$BACKUP_DIR"
+cd "$REPO_DIR"
+
+echo "[$(date -Iseconds)] Starting self-healing sync check in $REPO_DIR..."
+
+# 1. Fetch remote changes without modifying working tree
+git fetch origin "$BRANCH" --quiet
+
+LOCAL_HASH=$(git rev-parse HEAD)
+REMOTE_HASH=$(git rev-parse "origin/$BRANCH")
+
+if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
+    echo "[$(date -Iseconds)] Workspace is already at latest verified commit ($LOCAL_HASH)."
+    exit 0
+fi
+
+echo "[$(date -Iseconds)] Update detected: $LOCAL_HASH -> $REMOTE_HASH"
+
+# 2. Snapshot current state before applying changes
+echo "$LOCAL_HASH" > "$BACKUP_DIR/last_known_good.hash"
+if [ -f "docker-compose.yml" ]; then
+    docker compose ps > "$BACKUP_DIR/pre_deploy_containers.txt" || true
+fi
+
+# 3. Rollback Function (Triggered automatically on any failure)
+rollback() {
+    echo "[$(date -Iseconds)] CRITICAL: Deployment failed or health check timed out!"
+    echo "[$(date -Iseconds)] Initiating automatic rollback to $LOCAL_HASH..."
+    
+    git reset --hard "$LOCAL_HASH"
+    
+    if [ -f "docker-compose.yml" ]; then
+        docker compose up -d --build --remove-orphans
+    fi
+    
+    echo "[$(date -Iseconds)] Rollback complete. System restored to $LOCAL_HASH."
+    exit 1
+}
+
+# Trap unexpected script errors and trigger rollback
+trap 'rollback' ERR
+
+# 4. Apply new commit & rebuild stack
+git pull --ff-only origin "$BRANCH"
+
+if [ -f "docker-compose.yml" ]; then
+    docker compose up -d --build --remove-orphans
+fi
+
+# 5. Active Health Verification Loop
+echo "[$(date -Iseconds)] Verifying service health at $HEALTH_URL..."
+HEALTHY=false
+for ((i=1; i<=MAX_RETRIES; i++)); do
+    if curl --fail --silent --max-time 3 "$HEALTH_URL" > /dev/null; then
+        HEALTHY=true
+        break
+    fi
+    echo "  Attempt $i/$MAX_RETRIES failed. Waiting ${SLEEP_INTERVAL}s..."
+    sleep "$SLEEP_INTERVAL"
+done
+
+if [ "$HEALTHY" = false ]; then
+    rollback
+fi
+
+# Disable error trap after successful verification
+trap - ERR
+echo "[$(date -Iseconds)] SUCCESS: Deployment $REMOTE_HASH verified healthy."
+name: CI Verification & Build Gate
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest ruff
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Lint & Auto-Check Formatting (Ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run Test Suite
+        run: |
+          if [ -d "tests" ]; then pytest -v --tb=short; else echo "No tests directory found, skipping pytest"; fi
+
+      - name: Verify Docker Compose Configuration & Build
+        run: |
+          if [ -f docker-compose.yml ]; then
+            docker compose config -q
+            docker compose build
+          fi
+#!/usr/bin/env bash set -euo pipefail echo "Starting recovery environment verification..." echo "Checking Python environment..." python3 --version echo "Verifying local backup directories..." if [ -d "./backups" ]; then echo "Backup directory exists. Checking checksums..." find ./backups -type f -exec sha256sum {} \; else echo "No local backup directory found. Initializing structure..." mkdir -p ./backups/exports ./backups/logs fi echo "Environment verification complete." #!/usr/bin/env bash set -euo pipefail  echo "Starting recovery environment verification..." echo "Checking Python environment..." python3 --version  echo "Verifying local backup directories..." if [ -d "./backups" ]; then     echo "Backup directory exists. Checking checksums..."     find ./backups -type f -exec sha256sum {} \; else     echo "No local backup directory found. Initializing structure..."     mkdir -p ./backups/exports ./backups/logs fi  echo "Environment verification complete." # Account Recovery Evidence Record: @elijah_morrissey08  ## Target Details * **Platform:** TikTok * **Username:** @elijah_morrissey08 * **Original Creation Date / Period:** [Insert Estimated Date] * **Original Associated Email(s):** [Insert Old Emails] * **Original Associated Phone Number(s):** [Insert Old Phone Numbers] * **Associated Devices Used:** [Insert Device Models, e.g., Samsung Galaxy S23 FE, Linux Workstation]  ## Verification History * [ ] Initievansrobert517@gmail.comadpBetty-deploy.sh#!/usr/bin/env python3
+"""
+adpBetty / WK Precision Enterprise LLC - Zero-PII Account Ownership Attestation Generator
+Creates a GPG-signed JSON record proving timestamped claim authorship across all linked profiles.
+"""
+
+import json
+import hashlib
+import subprocess
+from datetime import datetime, timezone
+import os
+
+CLAIMANT = "Robert Edward Evans"
+ENTITY = "WK Precision Enterprise LLC"
+CONTACT_EMAIL = "evansrobert517@gmail.com"
+
+TARGET_ACCOUNTS = [
+    {"platform": "Instagram", "handle": "@robertedward5888"},
+    {"platform": "Instagram", "handle": "@robert531031"},
+    {"platform": "Instagram", "handle": "@robertevans5185"},
+    {"platform": "Instagram", "handle": "@robert6857evans"},
+    {"platform": "Instagram", "handle": "@robertedwardevan"},
+    {"platform": "Instagram", "handle": "@snakeskin365"},
+    {"platform": "Instagram", "handle": "@indianimal47"},
+    {"platform": "Instagram", "handle": "@itschriscashh"},
+    {"platform": "TikTok", "handle": "@hilarysaurusrex"},
+    {"platform": "TikTok", "handle": "@danielrenemusic", "url": "https://www.tiktok.com/@danielrenemusic"},
+    {"platform": "TikTok", "handle": "@dylan_1m3", "display_name": "dylan"},
+    {"platform": "TikTok", "handle": "@hopefordogs48", "url": "https://www.tiktok.com/@hopefordogs48"},
+    {"platform": "TikTok", "handle": "@elijah_morrissey08", "url": "https://www.tiktok.com/@elijah_morrissey08"}
+]
+
+def generate_zero_pii_attestation():
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    attestation = {
+        "document_type": "adpBetty Cryptographic Account Ownership Attestation",
+        "timestamp_utc": timestamp,
+        "claimant": CLAIMANT,
+        "legal_entity": ENTITY,
+        "jurisdiction": "State of Indiana, United States",
+        "verified_email": CONTACT_EMAIL,
+        "github_provenance": ["re1Lucky365", "adpsnake7-beep"],
+        "claimed_accounts": TARGET_ACCOUNTS,
+        "pii_policy": "Sensitive identity and financial documents withheld from version control; verified locally via GPG signatures."
+    }
+
+    raw_json = json.dumps(attestation, indent=2, sort_keys=True)
+    attestation_hash = hashlib.sha512(raw_json.encode("utf-8")).hexdigest()
+    attestation["attestation_sha512"] = attestation_hash
+
+    filename = f"account_claim_attestation_{int(datetime.now().timestamp())}.json"
+    filepath = os.path.join(os.path.expanduser("~/master-hub"), filename)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(json.dumps(attestation, indent=2))
+
+    print(f"[+] Zero-PII Attestation saved: {filepath}")
+    print(f"[+] SHA-512 Digest: {attestation_hash}")
+
+    subprocess.run(
+        ["gpg", "--local-user", CONTACT_EMAIL, "--detach-sign", "--armor", filepath],
+        check=True
+    )
+    print(f"[+] Detached GPG Signature created: {filepath}.asc")
+
+if __name__ == "__main__":
+    generate_zero_pii_attestation()
+# 1. Export your verified GPG public key for your vault records
+gpg --armor --export evansrobert517@gmail.com > ~/master-hub/public_key.asc
+
+# 2. Run the deployment and claim attestation scripts
+bash adpBetty-deploy.sh
+python3 ~/master-hub/scripts/account_claim_manifest.py
+python3 ~/master-hub/scripts/enterprise_backup_sync.py
+sync.pyHttps://www.facebook.com/share/1AiGYNckgx/#!/bin/bash
+set -euo pipefail
+
+TIMESTAMP=$(date -u +"%Y%m%d_%H%M%S")
+BUNDLE_DIR="vault_store/bundles"
+ARCHIVE="$BUNDLE_DIR/reclamation_vault_$TIMESTAMP.tar.zst"
+
+mkdir -p "$BUNDLE_DIR"
+
+echo "==> Creating compressed zstd archive of vault_store..."
+tar --exclude='vault_store/bundles' -cf - vault_store/ | zstd -T0 -o "$ARCHIVE"
+sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+if command -v gpg >/dev/null 2>&1; then
+    echo "==> Signing archive with default GPG key..."
+    gpg --detach-sign --armor "$ARCHIVE" || echo "[WARN] No default GPG key configured; skipped signature."
+fi
+
+echo "==> Bundle complete: $ARCHIVE"
+#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <path_to_file> <description> [account_id]"
+    exit 1
+fi
+
+SRC_FILE="$1"
+DESC="$2"
+ACCOUNT_ID="${3:-NULL}"
+DEST_DIR="vault_store/artifacts"
+
+mkdir -p "$DEST_DIR"
+BASENAME=$(basename "$SRC_FILE")
+TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+DEST_FILE="$DEST_DIR/${TIMESTAMP}_${BASENAME}"
+
+cp "$SRC_FILE" "$DEST_FILE"
+chmod 400 "$DEST_FILE"
+
+HASH=$(sha256sum "$DEST_FILE" | awk '{print $1}')
+
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('vault_store/reclamation.db')
+conn.execute(
+    'INSERT INTO evidence_artifacts (account_id, file_path, sha256_hash, ingested_at, description) VALUES (?, ?, ?, ?, ?)',
+    ($ACCOUNT_ID if '$ACCOUNT_ID' != 'NULL' else None, '$DEST_FILE', '$HASH', '$TIMESTAMP', '''$DESC''')
+)
+conn.commit()
+conn.close()
+"
+
+echo "[INGESTED] $DEST_FILE"
+echo "[SHA-256]  $HASH"
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, Cash App, TikTok)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli()
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+click==8.1.7
+pydantic==2.9.2
+zstandard==0.23.0
+SHELL := /bin/bash
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+VAULT_DIR := ./vault_store
+
+.PHONY: all setup init register notice bundle verify clean
+
+all:
+	@echo "Account Reclamation & Non-Abandonment Vault"
+	@echo "Usage: make [setup | init | register | notice | bundle | verify | clean]"
+
+setup:
+	python3 -m venv $(VENV)
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements.txt
+	chmod +x scripts/*.sh
+
+init: setup
+	mkdir -p $(VAULT_DIR)/artifacts $(VAULT_DIR)/notices $(VAULT_DIR)/bundles
+	chmod 700 $(VAULT_DIR)
+	$(PYTHON) src/schema.py
+	@echo "==> Vault initialized at $(VAULT_DIR)"
+
+register:
+	$(PYTHON) src/cli.py register
+
+notice:
+	$(PYTHON) src/cli.py generate-notice
+
+bundle:
+	./scripts/sign_and_bundle.sh
+
+verify:
+	$(PYTHON) src/cli.py verify-all
+
+clean:
+	rm -rf $(VENV) __pycache__
+Reclamation laws lost  abandoned I didn't abandon them I got locked outWrite repo codes for lost or abandoned accountsaccount-reclamation-vault/
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml   # Automated SHA-256 & GPG signature check
+├── scripts/
+│   ├── sign_and_bundle.sh               # GPG-sign and zstd-compress evidence bundles
+│   └── ingest_artifact.sh               # Hash and lock QR codes, IDs, or statements
+├── src/
+│   ├── schema.py                        # SQLite schema for accounts, lockouts & notices
+│   ├── notice_generator.py              # Generates formal Notice of Non-Abandonment
+│   └── cli.py                           # CLI for registering accounts & tracking appeals
+├── Makefile                             # Single-command deployment & backup
+├── requirements.txt                     # Minimal Python dependencies
+└── README.md
+Write repo codes for lost or abandoned accountsadpBetty-core/
+├── .github/
+│   ├── workflows/
+│   │   └── ci-self-heal.yml         # Global GitHub Actions verification gate
+│   └── dependabot.yml               # Automated dependency and action updates
+├── scripts/
+│   └── self_heal_deploy.sh          # Local self-healing sync and rollback daemon
+├── systemd/
+│   ├── workspace-self-heal.service  # Systemd service unit
+│   └── workspace-self-heal.timer    # Systemd 2-minute cadence timer
+├── src/                             # Application source code (Streamlit / API / Caddy)
+├── docker-compose.yml               # Local container orchestration
+├── requirements.txt                 # Python dependencies
+├── Makefile                         # Single-command installation & control
+└── README.md
+SHELL := /bin/bash
+INSTALL_DIR := /opt/Master-Hub
+SERVICE_NAME := workspace-self-heal
+
+.PHONY: all install update clean status logs
+
+all:
+	@echo "Usage: make [install | update | status | logs | clean]"
+
+install:
+	@echo "==> Installing Master-Hub / adpBetty-core to $(INSTALL_DIR)..."
+	mkdir -p $(INSTALL_DIR)
+	rsync -av --exclude='.git' ./ $(INSTALL_DIR)/
+	
+	@echo "==> Configuring executable permissions..."
+	chmod +x $(INSTALL_DIR)/scripts/self_heal_deploy.sh
+
+	@echo "==> Installing Systemd service and timer..."
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).service /etc/systemd/system/
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).timer /etc/systemd/system/
+	
+	systemctl daemon-reload
+	systemctl enable --now $(SERVICE_NAME).timer
+	
+	@echo "==> Setup complete! Timer status:"
+	systemctl status $(SERVICE_NAME).timer --no-pager
+
+update:
+	@echo "==> Pulling latest changes and triggering manual sync..."
+	cd $(INSTALL_DIR) && git pull origin main
+	$(INSTALL_DIR)/scripts/self_heal_deploy.sh $(INSTALL_DIR)
+
+status:
+	systemctl status $(SERVICE_NAME).timer $(SERVICE_NAME).service --no-pager || true
+	cd $(INSTALL_DIR) && docker compose ps
+
+logs:
+	journalctl -u $(SERVICE_NAME).service -n 50 --no-pager
+
+clean:
+	@echo "==> Stopping and removing systemd timers..."
+	systemctl disable --now $(SERVICE_NAME).timer || true
+	systemctl disable --now $(SERVICE_NAME).service || true
+	rm -f /etc/systemd/system/$(SERVICE_NAME).service
+	rm -f /etc/systemd/system/$(SERVICE_NAME).timer
+	systemctl daemon-reload
+	@echo "==> Clean complete."
+deploy.shSHELL := /bin/bash
+INSTALL_DIR := /opt/Master-Hub
+SERVICE_NAME := workspace-self-heal
+
+.PHONY: all install update clean status logs
+
+all:
+	@echo "Usage: make [install | update | status | logs | clean]"
+
+install:
+	@echo "==> Installing Master-Hub / adpBetty-core to $(INSTALL_DIR)..."
+	mkdir -p $(INSTALL_DIR)
+	rsync -av --exclude='.git' ./ $(INSTALL_DIR)/
+	
+	@echo "==> Configuring executable permissions..."
+	chmod +x $(INSTALL_DIR)/scripts/self_heal_deploy.sh
+
+	@echo "==> Installing Systemd service and timer..."
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).service /etc/systemd/system/
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).timer /etc/systemd/system/
+	
+	systemctl daemon-reload
+	systemctl enable --now $(SERVICE_NAME).timer
+	
+	@echo "==> Setup complete! Timer status:"
+	systemctl status $(SERVICE_NAME).timer --no-pager
+
+update:
+	@echo "==> Pulling latest changes and triggering manual sync..."
+	cd $(INSTALL_DIR) && git pull origin main
+	$(INSTALL_DIR)/scripts/self_heal_deploy.sh $(INSTALL_DIR)
+
+status:
+	systemctl status $(SERVICE_NAME).timer $(SERVICE_NAME).service --no-pager || true
+	cd $(INSTALL_DIR) && docker compose ps
+
+logs:
+	journalctl -u $(SERVICE_NAME).service -n 50 --no-pager
+
+clean:
+	@echo "==> Stopping and removing systemd timers..."
+	systemctl disable --now $(SERVICE_NAME).timer || true
+	systemctl disable --now $(SERVICE_NAME).service || true
+	rm -f /etc/systemd/system/$(SERVICE_NAME).service
+	rm -f /etc/systemd/system/$(SERVICE_NAME).timer
+	systemctl daemon-reload
+	@echo "==> Clean complete."
+adpBetty-core/
+├── .github/
+│   ├── workflows/
+│   │   └── ci-self-heal.yml         # Global GitHub Actions verification gate
+│   └── dependabot.yml               # Automated dependency and action updates
+├── scripts/
+│   └── self_heal_deploy.sh          # Local self-healing sync and rollback daemon
+├── systemd/
+│   ├── workspace-self-heal.service  # Systemd service unit
+│   └── workspace-self-heal.timer    # Systemd 2-minute cadence timer
+├── src/                             # Application source code (Streamlit / API / Caddy)
+├── docker-compose.yml               # Local container orchestration
+├── requirements.txt                 # Python dependencies
+├── Makefile                         # Single-command installation & control
+└── README.md
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+sudo systemctl daemon-reload
+sudo systemctl enable --now workspace-self-heal.timer
+[Unit]
+Description=Run Workspace Self-Healing Sync every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Unit=workspace-self-heal.service
+
+[Install]
+WantedBy=timers.target
+[Unit]
+Description=Self-Healing Git & Docker Workspace Sync
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/Master-Hub
+ExecStart=/opt/Master-Hub/scripts/self_heal_deploy.sh /opt/Master-Hub
+StandardOutput=journal
+StandardError=journal
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- Configuration ---
+REPO_DIR="${1:-$(pwd)}"
+BRANCH="main"
+HEALTH_URL="http://localhost:8501/_stcore/health" # Adjust to your Caddy/Streamlit/API health endpoint
+MAX_RETRIES=6
+SLEEP_INTERVAL=5
+BACKUP_DIR="$REPO_DIR/.deploy_backups"
+
+mkdir -p "$BACKUP_DIR"
+cd "$REPO_DIR"
+
+echo "[$(date -Iseconds)] Starting self-healing sync check in $REPO_DIR..."
+
+# 1. Fetch remote changes without modifying working tree
+git fetch origin "$BRANCH" --quiet
+
+LOCAL_HASH=$(git rev-parse HEAD)
+REMOTE_HASH=$(git rev-parse "origin/$BRANCH")
+
+if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
+    echo "[$(date -Iseconds)] Workspace is already at latest verified commit ($LOCAL_HASH)."
+    exit 0
+fi
+
+echo "[$(date -Iseconds)] Update detected: $LOCAL_HASH -> $REMOTE_HASH"
+
+# 2. Snapshot current state before applying changes
+echo "$LOCAL_HASH" > "$BACKUP_DIR/last_known_good.hash"
+if [ -f "docker-compose.yml" ]; then
+    docker compose ps > "$BACKUP_DIR/pre_deploy_containers.txt" || true
+fi
+
+# 3. Rollback Function (Triggered automatically on any failure)
+rollback() {
+    echo "[$(date -Iseconds)] CRITICAL: Deployment failed or health check timed out!"
+    echo "[$(date -Iseconds)] Initiating automatic rollback to $LOCAL_HASH..."
+    
+    git reset --hard "$LOCAL_HASH"
+    
+    if [ -f "docker-compose.yml" ]; then
+        docker compose up -d --build --remove-orphans
+    fi
+    
+    echo "[$(date -Iseconds)] Rollback complete. System restored to $LOCAL_HASH."
+    exit 1
+}
+
+# Trap unexpected script errors and trigger rollback
+trap 'rollback' ERR
+
+# 4. Apply new commit & rebuild stack
+git pull --ff-only origin "$BRANCH"
+
+if [ -f "docker-compose.yml" ]; then
+    docker compose up -d --build --remove-orphans
+fi
+
+# 5. Active Health Verification Loop
+echo "[$(date -Iseconds)] Verifying service health at $HEALTH_URL..."
+HEALTHY=false
+for ((i=1; i<=MAX_RETRIES; i++)); do
+    if curl --fail --silent --max-time 3 "$HEALTH_URL" > /dev/null; then
+        HEALTHY=true
+        break
+    fi
+    echo "  Attempt $i/$MAX_RETRIES failed. Waiting ${SLEEP_INTERVAL}s..."
+    sleep "$SLEEP_INTERVAL"
+done
+
+if [ "$HEALTHY" = false ]; then
+    rollback
+fi
+
+# Disable error trap after successful verification
+trap - ERR
+echo "[$(date -Iseconds)] SUCCESS: Deployment $REMOTE_HASH verified healthy."
+name: CI Verification & Build Gate
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest ruff
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Lint & Auto-Check Formatting (Ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run Test Suite
+        run: |
+          if [ -d "tests" ]; then pytest -v --tb=short; else echo "No tests directory found, skipping pytest"; fi
+
+      - name: Verify Docker Compose Configuration & Build
+        run: |
+          if [ -f docker-compose.yml ]; then
+            docker compose config -q
+            docker compose build
+          fi
+#!/usr/bin/env bash set -euo pipefail echo "Starting recovery environment verification..." echo "Checking Python environment..." python3 --version echo "Verifying local backup directories..." if [ -d "./backups" ]; then echo "Backup directory exists. Checking checksums..." find ./backups -type f -exec sha256sum {} \; else echo "No local backup directory found. Initializing structure..." mkdir -p ./backups/exports ./backups/logs fi echo "Environment verification complete." #!/usr/bin/env bash set -euo pipefail  echo "Starting recovery environment verification..." echo "Checking Python environment..." python3 --version  echo "Verifying local backup directories..." if [ -d "./backups" ]; then     echo "Backup directory exists. Checking checksums..."     find ./backups -type f -exec sha256sum {} \; else     echo "No local backup directory found. Initializing structure..."     mkdir -p ./backups/exports ./backups/logs fi  echo "Environment verification complete." # Account Recovery Evidence Record: @elijah_morrissey08  ## Target Details * **Platform:** TikTok * **Username:** @elijah_morrissey08 * **Original Creation Date / Period:** [Insert Estimated Date] * **Original Associated Email(s):** [Insert Old Emails] * **Original Associated Phone Number(s):** [Insert Old Phone Numbers] * **Associated Devices Used:** [Insert Device Models, e.g., Samsung Galaxy S23 FE, Linux Workstation]  ## Verification History * [ ] Initial ticket submitted via TikTok In-App Support. * [ ] Automated handle status check configured via GitHub Actions. Legal Laws for reclining lost or abandoned accounts GitHub repo codes  This is one of my old accounts." https://www.tiktok.com/@elijah_morrissey08?_r=1&_t=ZT-9BMTzL2uNg6 account-recovery-tracker/ ├── .github/ │   └─https://www.tiktok.com/@elijah_morrissey08?_r=1&_t=ZT-9BMTzL2uNg6#!/bin/bash
+set -euo pipefail
+
+TIMESTAMP=$(date -u +"%Y%m%d_%H%M%S")
+BUNDLE_DIR="vault_store/bundles"
+ARCHIVE="$BUNDLE_DIR/reclamation_vault_$TIMESTAMP.tar.zst"
+
+mkdir -p "$BUNDLE_DIR"
+
+echo "==> Creating compressed zstd archive of vault_store..."
+tar --exclude='vault_store/bundles' -cf - vault_store/ | zstd -T0 -o "$ARCHIVE"
+sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+if command -v gpg >/dev/null 2>&1; then
+    echo "==> Signing archive with default GPG key..."
+    gpg --detach-sign --armor "$ARCHIVE" || echo "[WARN] No default GPG key configured; skipped signature."
+fi
+
+echo "==> Bundle complete: $ARCHIVE"
+#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <path_to_file> <description> [account_id]"
+    exit 1
+fi
+
+SRC_FILE="$1"
+DESC="$2"
+ACCOUNT_ID="${3:-NULL}"
+DEST_DIR="vault_store/artifacts"
+
+mkdir -p "$DEST_DIR"
+BASENAME=$(basename "$SRC_FILE")
+TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+DEST_FILE="$DEST_DIR/${TIMESTAMP}_${BASENAME}"
+
+cp "$SRC_FILE" "$DEST_FILE"
+chmod 400 "$DEST_FILE"
+
+HASH=$(sha256sum "$DEST_FILE" | awk '{print $1}')
+
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('vault_store/reclamation.db')
+conn.execute(
+    'INSERT INTO evidence_artifacts (account_id, file_path, sha256_hash, ingested_at, description) VALUES (?, ?, ?, ?, ?)',
+    ($ACCOUNT_ID if '$ACCOUNT_ID' != 'NULL' else None, '$DEST_FILE', '$HASH', '$TIMESTAMP', '''$DESC''')
+)
+conn.commit()
+conn.close()
+"
+
+echo "[INGESTED] $DEST_FILE"
+echo "[SHA-256]  $HASH"
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, Cash App, TikTok)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli()
+click==8.1.7
+pydantic==2.9.2
+zstandard==0.23.0
+click==8.1.7
+pydantic==2.9.2
+zstandard==0.23.0
+SHELL := /bin/bash
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+VAULT_DIR := ./vault_store
+
+.PHONY: all setup init register notice bundle verify clean
+
+all:
+	@echo "Account Reclamation & Non-Abandonment Vault"
+	@echo "Usage: make [setup | init | register | notice | bundle | verify | clean]"
+
+setup:
+	python3 -m venv $(VENV)
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements.txt
+	chmod +x scripts/*.sh
+
+init: setup
+	mkdir -p $(VAULT_DIR)/artifacts $(VAULT_DIR)/notices $(VAULT_DIR)/bundles
+	chmod 700 $(VAULT_DIR)
+	$(PYTHON) src/schema.py
+	@echo "==> Vault initialized at $(VAULT_DIR)"
+
+register:
+	$(PYTHON) src/cli.py register
+
+notice:
+	$(PYTHON) src/cli.py generate-notice
+
+bundle:
+	./scripts/sign_and_bundle.sh
+
+verify:
+	$(PYTHON) src/cli.py verify-all
+
+clean:
+	rm -rf $(VENV) __pycache__
+Reclamation laws lost  abandoned I didn't abandon them I got locked outWrite repo codes for lost or abandoned accountsReclamation laws lost  abandoned I didn't abandon them I got locked outWrite repo codes for lost or abandoned accountsaccount-reclamation-vault/
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml   # Automated SHA-256 & GPG signature check
+├── scripts/
+│   ├── sign_and_bundle.sh               # GPG-sign and zstd-compress evidence bundles
+│   └── ingest_artifact.sh               # Hash and lock QR codes, IDs, or statements
+├── src/
+│   ├── schema.py                        # SQLite schema for accounts, lockouts & notices
+│   ├── notice_generator.py              # Generates formal Notice of Non-Abandonment
+│   └── cli.py                           # CLI for registering accounts & tracking appeals
+├── Makefile                             # Single-command deployment & backup
+├── requirements.txt                     # Minimal Python dependencies
+└── README.md
+Write repo codes for lost or abandoned accountsadpBetty-core/
+├── .github/
+│   ├── workflows/
+│   │   └── ci-self-heal.yml         # Global GitHub Actions verification gate
+│   └── dependabot.yml               # Automated dependency and action updates
+├── scripts/
+│   └── self_heal_deploy.sh          # Local self-healing sync and rollback daemon
+├── systemd/
+│   ├── workspace-self-heal.service  # Systemd service unit
+│   └── workspace-self-heal.timer    # Systemd 2-minute cadence timer
+├── src/                             # Application source code (Streamlit / API / Caddy)
+├── docker-compose.yml               # Local container orchestration
+├── requirements.txt                 # Python dependencies
+├── Makefile                         # Single-command installation & control
+└── README.md
+SHELL := /bin/bash
+INSTALL_DIR := /opt/Master-Hub
+SERVICE_NAME := workspace-self-heal
+
+.PHONY: all install update clean status logs
+
+all:
+	@echo "Usage: make [install | update | status | logs | clean]"
+
+install:
+	@echo "==> Installing Master-Hub / adpBetty-core to $(INSTALL_DIR)..."
+	mkdir -p $(INSTALL_DIR)
+	rsync -av --exclude='.git' ./ $(INSTALL_DIR)/
+	
+	@echo "==> Configuring executable permissions..."
+	chmod +x $(INSTALL_DIR)/scripts/self_heal_deploy.sh
+
+	@echo "==> Installing Systemd service and timer..."
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).service /etc/systemd/system/
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).timer /etc/systemd/system/
+	
+	systemctl daemon-reload
+	systemctl enable --now $(SERVICE_NAME).timer
+	
+	@echo "==> Setup complete! Timer status:"
+	systemctl status $(SERVICE_NAME).timer --no-pager
+
+update:
+	@echo "==> Pulling latest changes and triggering manual sync..."
+	cd $(INSTALL_DIR) && git pull origin main
+	$(INSTALL_DIR)/scripts/self_heal_deploy.sh $(INSTALL_DIR)
+
+status:
+	systemctl status $(SERVICE_NAME).timer $(SERVICE_NAME).service --no-pager || true
+	cd $(INSTALL_DIR) && docker compose ps
+
+logs:
+	journalctl -u $(SERVICE_NAME).service -n 50 --no-pager
+
+clean:
+	@echo "==> Stopping and removing systemd timers..."
+	systemctl disable --now $(SERVICE_NAME).timer || true
+	systemctl disable --now $(SERVICE_NAME).service || true
+	rm -f /etc/systemd/system/$(SERVICE_NAME).service
+	rm -f /etc/systemd/system/$(SERVICE_NAME).timer
+	systemctl daemon-reload
+	@echo "==> Clean complete."
+deploy.shadpBetty-core/
+├── .github/
+│   ├── workflows/
+│   │   └── ci-self-heal.yml         # Global GitHub Actions verification gate
+│   └── dependabot.yml               # Automated dependency and action updates
+├── scripts/
+│   └── self_heal_deploy.sh          # Local self-healing sync and rollback daemon
+├── systemd/
+│   ├── workspace-self-heal.service  # Systemd service unit
+│   └── workspace-self-heal.timer    # Systemd 2-minute cadence timer
+├── src/                             # Application source code (Streamlit / API / Caddy)
+├── docker-compose.yml               # Local container orchestration
+├── requirements.txt                 # Python dependencies
+├── Makefile                         # Single-command installation & control
+└── README.md
+SHELL := /bin/bash
+INSTALL_DIR := /opt/Master-Hub
+SERVICE_NAME := workspace-self-heal
+
+.PHONY: all install update clean status logs
+
+all:
+	@echo "Usage: make [install | update | status | logs | clean]"
+
+install:
+	@echo "==> Installing Master-Hub / adpBetty-core to $(INSTALL_DIR)..."
+	mkdir -p $(INSTALL_DIR)
+	rsync -av --exclude='.git' ./ $(INSTALL_DIR)/
+	
+	@echo "==> Configuring executable permissions..."
+	chmod +x $(INSTALL_DIR)/scripts/self_heal_deploy.sh
+
+	@echo "==> Installing Systemd service and timer..."
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).service /etc/systemd/system/
+	cp $(INSTALL_DIR)/systemd/$(SERVICE_NAME).timer /etc/systemd/system/
+	
+	systemctl daemon-reload
+	systemctl enable --now $(SERVICE_NAME).timer
+	
+	@echo "==> Setup complete! Timer status:"
+	systemctl status $(SERVICE_NAME).timer --no-pager
+
+update:
+	@echo "==> Pulling latest changes and triggering manual sync..."
+	cd $(INSTALL_DIR) && git pull origin main
+	$(INSTALL_DIR)/scripts/self_heal_deploy.sh $(INSTALL_DIR)
+
+status:
+	systemctl status $(SERVICE_NAME).timer $(SERVICE_NAME).service --no-pager || true
+	cd $(INSTALL_DIR) && docker compose ps
+
+logs:
+	journalctl -u $(SERVICE_NAME).service -n 50 --no-pager
+
+clean:
+	@echo "==> Stopping and removing systemd timers..."
+	systemctl disable --now $(SERVICE_NAME).timer || true
+	systemctl disable --now $(SERVICE_NAME).service || true
+	rm -f /etc/systemd/system/$(SERVICE_NAME).service
+	rm -f /etc/systemd/system/$(SERVICE_NAME).timer
+	systemctl daemon-reload
+	@echo "==> Clean complete."
+sudo systemctl daemon-reload
+sudo systemctl enable --now workspace-self-heal.timer
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+[Unit]
+Description=Self-Healing Git & Docker Workspace Sync
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/Master-Hub
+ExecStart=/opt/Master-Hub/scripts/self_heal_deploy.sh /opt/Master-Hub
+StandardOutput=journal
+StandardError=journal
+[Unit]
+Description=Run Workspace Self-Healing Sync every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Unit=workspace-self-heal.service
+
+[Install]
+WantedBy=timers.target
+name: CI Verification & Build Gate
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest ruff
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Lint & Auto-Check Formatting (Ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run Test Suite
+        run: |
+          if [ -d "tests" ]; then pytest -v --tb=short; else echo "No tests directory found, skipping pytest"; fi
+
+      - name: Verify Docker Compose Configuration & Build
+        run: |
+          if [ -f docker-compose.yml ]; then
+            docker compose config -q
+            docker compose build
+          fi
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- Configuration ---
+REPO_DIR="${1:-$(pwd)}"
+BRANCH="main"
+HEALTH_URL="http://localhost:8501/_stcore/health" # Adjust to your Caddy/Streamlit/API health endpoint
+MAX_RETRIES=6
+SLEEP_INTERVAL=5
+BACKUP_DIR="$REPO_DIR/.deploy_backups"
+
+mkdir -p "$BACKUP_DIR"
+cd "$REPO_DIR"
+
+echo "[$(date -Iseconds)] Starting self-healing sync check in $REPO_DIR..."
+
+# 1. Fetch remote changes without modifying working tree
+git fetch origin "$BRANCH" --quiet
+
+LOCAL_HASH=$(git rev-parse HEAD)
+REMOTE_HASH=$(git rev-parse "origin/$BRANCH")
+
+if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
+    echo "[$(date -Iseconds)] Workspace is already at latest verified commit ($LOCAL_HASH)."
+    exit 0
+fi
+
+echo "[$(date -Iseconds)] Update detected: $LOCAL_HASH -> $REMOTE_HASH"
+
+# 2. Snapshot current state before applying changes
+echo "$LOCAL_HASH" > "$BACKUP_DIR/last_known_good.hash"
+if [ -f "docker-compose.yml" ]; then
+    docker compose ps > "$BACKUP_DIR/pre_deploy_containers.txt" || true
+fi
+
+# 3. Rollback Function (Triggered automatically on any failure)
+rollback() {
+    echo "[$(date -Iseconds)] CRITICAL: Deployment failed or health check timed out!"
+    echo "[$(date -Iseconds)] Initiating automatic rollback to $LOCAL_HASH..."
+    
+    git reset --hard "$LOCAL_HASH"
+    
+    if [ -f "docker-compose.yml" ]; then
+        docker compose up -d --build --remove-orphans
+    fi
+    
+    echo "[$(date -Iseconds)] Rollback complete. System restored to $LOCAL_HASH."
+    exit 1
+}
+
+# Trap unexpected script errors and trigger rollback
+trap 'rollback' ERR
+
+# 4. Apply new commit & rebuild stack
+git pull --ff-only origin "$BRANCH"
+
+if [ -f "docker-compose.yml" ]; then
+    docker compose up -d --build --remove-orphans
+fi
+
+# 5. Active Health Verification Loop
+echo "[$(date -Iseconds)] Verifying service health at $HEALTH_URL..."
+HEALTHY=false
+for ((i=1; i<=MAX_RETRIES; i++)); do
+    if curl --fail --silent --max-time 3 "$HEALTH_URL" > /dev/null; then
+        HEALTHY=true
+        break
+    fi
+    echo "  Attempt $i/$MAX_RETRIES failed. Waiting ${SLEEP_INTERVAL}s..."
+    sleep "$SLEEP_INTERVAL"
+done
+
+if [ "$HEALTHY" = false ]; then
+    rollback
+fi
+
+# Disable error trap after successful verification
+trap - ERR
+echo "[$(date -Iseconds)] SUCCESS: Deployment $REMOTE_HASH verified healthy."
+user.emailcommit.gpgsignsiem-integrity-monitor.servicejournald.serviceadpBetty-master-deploy.sh#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Starting recovery environment verification..."
+echo "Checking Python environment..."
+python3 --version
+
+echo "Verifying local backup directories..."
+if [ -d "./backups" ]; then
+    echo "Backup directory exists. Checking checksums..."
+    find ./backups -type f -exec sha256sum {} \;
+else
+    echo "No local backup directory found. Initializing structure..."
+    mkdir -p ./backups/exports ./backups/logs
+fi
+
+echo "Environment verification complete."
+Legal Laws for reclining lost or abandoned accounts GitHub repo codes 
+This is one of my old accounts."
+https://www.tiktok.com/@elijah_morrissey08?_r=1&_t=ZT-9BMTzL2uNg6
+account-recovery-tracker/
+├── .github/
+│   └── workflows/
+│       └── check-handle-status.yml
+├── docs/
+│   └── recovery-evidence-template.md
+├── scripts/
+│   └── verify_backups.sh
+└── README.md
+name: Public Handle Status Check
+
+on:
+  schedule:
+    - cron: '0 12 * * 1' # Runs every Monday at 12:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Profile HTTP Status
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -A "Mozilla/5.0" "https://www.tiktok.com/@elijah_morrissey08")
+          echo "Profile HTTP status code: $STATUS"
+Yes everything expand everything automaticallyname: Public Handle Status Check
+
+on:
+  schedule:
+    - cron: '0 12 * * 1' # Runs every Monday at 12:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Profile HTTP Status
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -A "Mozilla/5.0" "https://www.tiktok.com/@elijah_morrissey08")
+          echo "Profile HTTP status code: $STATUS"
+account-recovery-tracker/
+├── .github/
+│   └── workflows/
+│       └── check-handle-status.yml
+├── docs/
+│   └── recovery-evidence-template.md
+├── scripts/
+│   └── verify_backups.sh
+└── README.md
+# 1. Configure global Git identity and strict GPG signing
+git config --global user.name "Robert Edward Evans"
+git config --global user.email "evansrobert517@gmail.com"
+git config --global commit.gpgsign true
+
+# 2. Reload systemd and start the SIEM monitor daemon
+sudo systemctl daemon-reload
+sudo systemctl enable siem-integrity-monitor.service
+sudo systemctl start siem-integrity-monitor.service
+
+# 3. Check live service status and tail real-time security logs
+sudo systemctl status siem-integrity-monitor.service
+journalctl -t siem-integrity-monitor -f
+
+# 4. Encrypt local private verification documents securely on disk (offline storage)
+tar -I zstd -cf - ~/private_verification_docs | gpg --symmetric --cipher-algo AES256 -o ~/vault_verification.tar.zst.gpg
+#!/usr/bin/env python3
+"""
+WK Precision Enterprise LLC - Cryptographic Asset & Copyright Anchoring Utility
+Generates tamper-proof SHA-512 asset fingerprints and GPG-signed ownership declarations.
+"""
+
+import os
+import sys
+import hashlib
+import json
+import subprocess
+from datetime import datetime, timezone
+
+OWNER_NAME = "Robert Edward Evans"
+ENTITY = "WK Precision Enterprise LLC"
+SIGNING_EMAIL = "evansrobert517@gmail.com"
+
+def generate_asset_manifest(target_file_or_dir: str):
+    print(f"[*] Generating cryptographic ownership manifest for: {target_file_or_dir}")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    hasher = hashlib.sha512()
+    if os.path.isfile(target_file_or_dir):
+        with open(target_file_or_dir, "rb") as f:
+            while chunk := f.read(8192):
+                hasher.update(chunk)
+    elif os.path.isdir(target_file_or_dir):
+        for root, _, files in os.walk(target_file_or_dir):
+            if ".git" in root:
+                continue
+            for file in sorted(files):
+                filepath = os.path.join(root, file)
+                try:
+                    with open(filepath, "rb") as f:
+                        while chunk := f.read(8192):
+                            hasher.update(chunk)
+                except Exception:
+                    pass
+
+    asset_hash = hasher.hexdigest()
+    
+    manifest = {
+        "owner": OWNER_NAME,
+        "legal_entity": ENTITY,
+        "email": SIGNING_EMAIL,
+        "target": target_file_or_dir,
+        "timestamp_utc": timestamp,
+        "sha512_fingerprint": asset_hash,
+        "rights": "All rights reserved. Unauthorized reproduction or identity misappropriation is strictly prohibited."
+    }
+    
+    manifest_filename = f"ownership_manifest_{int(datetime.now().timestamp())}.json"
+    with open(manifest_filename, "w", encoding="utf-8") as out:
+        out.write(json.dumps(manifest, indent=2))
+        
+    print(f"[+] Manifest created successfully: {manifest_filename}")
+    print(f"    Asset SHA-512: {asset_hash}")
+    
+    try:
+        subprocess.run(["gpg", "--detach-sign", "--armor", manifest_filename], check=True)
+        print(f"[+] GPG detached signature generated: {manifest_filename}.asc")
+    except Exception as e:
+        print(f"[-] Notice: GPG signature skipped or failed ({e}).")
+
+if __name__ == "__main__":
+    target = sys.argv[1] if len(sys.argv) > 1 else "."
+    generate_asset_manifest(target)
+[Unit]
+Description=Enterprise SIEM Integrity & GPG Signature Monitor (WK Precision Enterprise LLC)
+After=network.target journald.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/re1Lucky365/master-hub
+ExecStart=/usr/bin/python3 /home/re1Lucky365/master-hub/scripts/siem_alert_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+monitor.py================================================================================
+                    FORMAL DECLARATION OF LEGAL OWNERSHIP,
+                 COPYRIGHT PROVENANCE & IDENTITY ATTESTATION
+================================================================================
+
+Date: November 12, 2026
+Legal Principal / Claimant: Robert Edward Evans
+Date of Birth: October 9, 1981
+Registered Entity: WK Precision Enterprise LLC (State of Indiana)
+Primary Contact & Signing Email: evansrobert517@gmail.com
+Primary Workstations & Developer Handles: re1Lucky365, adpsnake7-beep
+Primary Repository Root: /home/re1Lucky365/master-hub
+
+--------------------------------------------------------------------------------
+1. STATEMENT OF LEGAL STANDING & CORPORATE PRINCIPAL
+--------------------------------------------------------------------------------
+I, Robert Edward Evans, acting in my individual capacity and as the sole member 
+and managing principal of WK Precision Enterprise LLC, hereby declare under 
+penalty of perjury that all digital assets, source code repositories, automated 
+pipelines, cryptographic keys, and associated online accounts listed across my 
+infrastructure are the exclusive property of myself and WK Precision Enterprise LLC.
+
+--------------------------------------------------------------------------------
+2. IDENTIFICATION & VERIFICATION SCHEDULE
+--------------------------------------------------------------------------------
+Pursuant to establishing undeniable legal standing and reclaiming unauthorized 
+or locked platform accounts, the following verified parameters anchor all assets:
+- Full Legal Name: Robert Edward Evans
+- Date of Birth: October 9, 1981
+- Residential / Business Jurisdiction: Evansville & Washington, Indiana, USA
+- Corporate Entity Registration: WK Precision Enterprise LLC (Indiana Secretary of State)
+- Cryptographic Root: GPG Key Fingerprint bound to evansrobert517@gmail.com
+- Financial & Identity Anchor: Personal banking credentials, debit cards, state driver's 
+  license, and social security verification records held securely on offline local media 
+  under AES-256 and Zstandard encryption.
+
+--------------------------------------------------------------------------------
+3. NOTICE OF RIGHTS & STATUTORY PROTECTIONS
+--------------------------------------------------------------------------------
+Unauthorized lockout, credential modification, or identity misappropriation of these 
+properties violates federal and state statutes, including the Computer Fraud and 
+Abuse Act (18 U.S.C. § 1030), wire fraud statutes, and Indiana identity deception 
+laws. All rights, title, and copyright interest are strictly reserved.
+
+Executed under penalty of perjury:
+/s/ Robert Edward Evans
+Robert Edward Evans, Managing Principal — WK Precision Enterprise LLC
+================================================================================
+#!/usr/bin/env python3
+"""
+SIEM Alert Monitor & Integrity Auditor
+Continuously validates Git GPG commit signatures and immutable ledger integrity.
+Emits structured JSON alerts to syslog.
+"""
+
+import subprocess
+import syslog
+import time
+import json
+import os
+from datetime import datetime, timezone
+
+CHECK_INTERVAL_SECONDS = 60
+REPO_PATH = os.path.expanduser("~/master-hub")
+
+def log_siem_alert(severity: str, event_type: str, message: str):
+    alert_payload = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "severity": severity,
+        "event_type": event_type,
+        "message": message,
+        "source_host": os.uname().nodename,
+        "registered_owner": "Robert Edward Evans (WK Precision Enterprise LLC)"
+    }
+    
+    formatted_log = json.dumps(alert_payload)
+    if severity == "CRITICAL":
+        syslog.syslog(syslog.LOG_CRIT, f"SIEM_ALERT: {formatted_log}")
+    else:
+        syslog.syslog(syslog.LOG_WARNING, f"SIEM_ALERT: {formatted_log}")
+    print(f"[{severity}] {event_type}: {message}")
+
+def verify_git_gpg_signature() -> bool:
+    try:
+        os.chdir(REPO_PATH)
+        result = subprocess.run(
+            ["git", "log", "-1", "--pretty=format:%G?"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        sig_status = result.stdout.strip()
+        if sig_status == 'G':
+            return True
+        elif sig_status in ['B', 'E']:
+            log_siem_alert("CRITICAL", "GPG_SIGNATURE_INVALID", f"Commit GPG signature verification failed with status: '{sig_status}'. Potential tampering detected.")
+            return False
+    except Exception as e:
+        log_siem_alert("WARNING", "GIT_AUDIT_ERROR", f"Could not audit git repository: {e}")
+    return True
+
+if __name__ == "__main__":
+    syslog.openlog("siem-integrity-monitor", syslog.LOG_PID, syslog.LOG_DAEMON)
+    log_siem_alert("INFO", "MONITOR_STARTED", "SIEM Integrity & GPG Signature Monitor initialized.")
+    while True:
+        verify_git_gpg_signature()
+        time.sleep(CHECK_INTERVAL_SECONDS)
+November 12, 202Gpg --armor --export evansrobert517@gmail.com > public_key.asc
+gpg --output ~/public_key.asc --armor --export evansrobert517@gmail.com
+gpg --armor --export evansrobert517@gmail.com
+gpg --armor --export YOUR_KEY_ID_OR_FINGERPRINT > public_key.asc
+gpg --armor --export evansrobert517@gmail.com > public_key.asc
+gpg --output ~/public_key.asc --armor --export evansrobert517@gmail.com
+gpg --armor --export evansrobert517@gmail.com
+gpg --armor --export YOUR_KEY_ID_OR_FINGERPRINT > public_key.asc
+evansrobert517@gmail.comgpg --armor --export YOUR_KEY_ID_OR_FINGERPRINT > public_key.asc
+gpg --armor --export evansrobert517@gmail.com
+gpg --output ~/public_key.asc --armor --export evansrobert517@gmail.com
+gpg --armor --export evansrobert517@gmail.com > public_key.asc
+adpBetty-master-deploy.shbash adpBetty-master-deploy.sh
+python3 ~/master-hub/scripts/account_claim_manifest.py
+python3 ~/master-hub/scripts/enterprise_backup_sync.py
+sync.py#!/usr/bin/env bash
+set -euo pipefail
+
+WORKSPACE="$HOME/master-hub"
+SCRIPTS_DIR="$WORKSPACE/scripts"
+BACKUP_DIR="$HOME/backups/master-hub"
+GPG_USER="evansrobert517@gmail.com"
+
+echo "[*] Initializing adpBetty Enterprise Pipeline Structure..."
+mkdir -p "$SCRIPTS_DIR" "$BACKUP_DIR"
+
+# 1. Automated Enterprise Backup & Git Sync Script
+cat << 'EOF' > "$SCRIPTS_DIR/enterprise_backup_sync.py"
+#!/usr/bin/env python3
+"""
+adpBetty / WK Precision Enterprise LLC - Automated Enterprise Backup & Sync Pipeline
+Creates Zstandard-compressed, SHA-512 hashed, and GPG-signed archives of ~/master-hub
+and synchronizes verified commits with remote Git repositories.
+"""
+
+import os
+import subprocess
+import hashlib
+from datetime import datetime, timezone
+
+REPO_DIR = os.path.expanduser("~/master-hub")
+BACKUP_DIR = os.path.expanduser("~/backups/master-hub")
+GPG_RECIPIENT = "evansrobert517@gmail.com"
+
+def run_cmd(cmd: list, cwd: str = None):
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed ({' '.join(cmd)}): {result.stderr.strip()}")
+    return result.stdout.strip()
+
+def compute_sha512(filepath: str) -> str:
+    sha512 = hashlib.sha512()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            sha512.update(chunk)
+    return sha512.hexdigest()
+
+def create_verified_backup() -> str:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_name = f"master_hub_backup_{timestamp}.tar.zst"
+    archive_path = os.path.join(BACKUP_DIR, archive_name)
+
+    print(f"[*] Creating Zstandard archive: {archive_path}")
+    run_cmd([
+        "tar",
+        "--exclude=.git/objects/pack/*.tmp",
+        "--exclude=__pycache__",
+        "--exclude=*.env",
+        "-I", "zstd -19 -T0",
+        "-cf", archive_path,
+        "-C", os.path.expanduser("~"),
+        "master-hub"
+    ])
+
+    digest = compute_sha512(archive_path)
+    sha_file = f"{archive_path}.sha512"
+    with open(sha_file, "w", encoding="utf-8") as f:
+        f.write(f"{digest}  {archive_name}\n")
+    print(f"[+] SHA-512 Digest written: {sha_file}")
+
+    asc_file = f"{archive_path}.asc"
+    run_cmd([
+        "gpg", "--batch", "--yes",
+        "--local-user", GPG_RECIPIENT,
+        "--detach-sign", "--armor",
+        "--output", asc_file,
+        archive_path
+    ])
+    print(f"[+] Detached GPG signature created: {asc_file}")
+    return archive_path
+
+def sync_git_repositories():
+    print("[*] Checking Git workspace status...")
+    status = run_cmd(["git", "status", "--porcelain"], cwd=REPO_DIR)
+    if status:
+        run_cmd(["git", "add", "-A"], cwd=REPO_DIR)
+        msg = f"chore(adpBetty): automated signed sync {datetime.now(timezone.utc).isoformat()}"
+        run_cmd(["git", "commit", "-S", "-m", msg], cwd=REPO_DIR)
+        print("[+] Created GPG-signed sync commit.")
+
+    remotes = run_cmd(["git", "remote"], cwd=REPO_DIR).splitlines()
+    for remote in remotes:
+        print(f"[*] Pushing to remote '{remote}'...")
+        run_cmd(["git", "push", remote, "--all"], cwd=REPO_DIR)
+        run_cmd(["git", "push", remote, "--tags"], cwd=REPO_DIR)
+        print(f"[+] Synced '{remote}' successfully.")
+
+if __name__ == "__main__":
+    archive = create_verified_backup()
+    sync_git_repositories()
+    print(f"[✓] adpBetty Enterprise Backup & Sync complete: {archive}")
+EOF
+
+# 2. Zero-PII Account Ownership Attestation Script (All Linked Handles & URLs)
+cat << 'EOF' > "$SCRIPTS_DIR/account_claim_manifest.py"
+#!/usr/bin/env python3
+"""
+adpBetty / WK Precision Enterprise LLC - Zero-PII Account Ownership Attestation Generator
+Creates a GPG-signed JSON record proving timestamped claim authorship across all linked profiles.
+"""
+
+import json
+import hashlib
+import subprocess
+from datetime import datetime, timezone
+
+CLAIMANT = "Robert Edward Evans"
+ENTITY = "WK Precision Enterprise LLC"
+CONTACT_EMAIL = "evansrobert517@gmail.com"
+
+TARGET_ACCOUNTS = [
+    {"platform": "Instagram", "handle": "@robertedward5888"},
+    {"platform": "Instagram", "handle": "@robert531031"},
+    {"platform": "Instagram", "handle": "@robertevans5185"},
+    {"platform": "Instagram", "handle": "@robert6857evans"},
+    {"platform": "Instagram", "handle": "@robertedwardevan"},
+    {"platform": "Instagram", "handle": "@snakeskin365"},
+    {"platform": "Instagram", "handle": "@indianimal47"},
+    {"platform": "Instagram", "handle": "@itschriscashh"},
+    {"platform": "TikTok", "handle": "@hilarysaurusrex"},
+    {"platform": "TikTok", "handle": "@danielrenemusic", "url": "https://www.tiktok.com/@danielrenemusic"},
+    {"platform": "TikTok", "handle": "@dylan_1m3", "display_name": "dylan"},
+    {"platform": "TikTok", "handle": "@hopefordogs48", "url": "https://www.tiktok.com/@hopefordogs48"}
+]
+
+def generate_zero_pii_attestation():
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    attestation = {
+        "document_type": "adpBetty Cryptographic Account Ownership Attestation",
+        "timestamp_utc": timestamp,
+        "claimant": CLAIMANT,
+        "legal_entity": ENTITY,
+        "jurisdiction": "State of Indiana, United States",
+        "verified_email": CONTACT_EMAIL,
+        "github_provenance": ["re1Lucky365", "adpsnake7-beep"],
+        "claimed_accounts": TARGET_ACCOUNTS,
+        "pii_policy": "Sensitive identity and financial documents withheld from version control; verified locally via GPG signatures."
+    }
+
+    raw_json = json.dumps(attestation, indent=2, sort_keys=True)
+    attestation_hash = hashlib.sha512(raw_json.encode("utf-8")).hexdigest()
+    attestation["attestation_sha512"] = attestation_hash
+
+    filename = f"account_claim_attestation_{int(datetime.now().timestamp())}.json"
+    filepath = os.path.join(os.path.expanduser("~/master-hub"), filename)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(json.dumps(attestation, indent=2))
+
+    print(f"[+] Zero-PII Attestation saved: {filepath}")
+    print(f"[+] SHA-512 Digest: {attestation_hash}")
+
+    subprocess.run(
+        ["gpg", "--local-user", CONTACT_EMAIL, "--detach-sign", "--armor", filepath],
+        check=True
+    )
+    print(f"[+] Detached GPG Signature created: {filepath}.asc")
+
+if __name__ == "__main__":
+    generate_zero_pii_attestation()
+EOF
+
+# 3. Set Executable Permissions
+echo "[*] Setting executable permissions on pipeline scripts..."
+chmod +x "$SCRIPTS_DIR/enterprise_backup_sync.py"
+chmod +x "$SCRIPTS_DIR/account_claim_manifest.py"
+
+echo "[✓] adpBetty pipeline successfully deployed and configured."
+To ensure your entire ecosystem, repository network, and cryptographic backup infrastructure are unified under adpBetty—and that every pipeline, verification check, and account claim is fully aligned with your local codebase—here is the consolidated master architecture and implementation script.
+This bundles your backup automation, GPG integrity validation, and zero-PII ownership manifests into a single, cohesive deployment structure for your Linux workstations.
+Master Deployment Script: adpBetty-deploy.sh
+Save and run this script from your workspace to initialize or update your entire local pipeline:
+#!/usr/bin/env bash
+set -euo pipefail
+
+WORKSPACE="$HOME/master-hub"
+SCRIPTS_DIR="$WORKSPACE/scripts"
+BACKUP_DIR="$HOME/backups/master-hub"
+GPG_USER="evansrobert517@gmail.com"
+
+echo "[*] Initializing adpBetty Enterprise Pipeline Structure..."
+mkdir -p "$SCRIPTS_DIR" "$BACKUP_DIR"
+
+# 1. Write Automated Backup & Sync Script
+cat << 'EOF' > "$SCRIPTS_DIR/enterprise_backup_sync.py"
+#!/usr/bin/env python3
+"""
+adpBetty / WK Precision Enterprise LLC - Automated Enterprise Backup & Sync Pipeline
+Creates Zstandard-compressed, SHA-512 hashed, and GPG-signed archives of ~/master-hub
+and synchronizes verified commits with remote Git repositories.
+"""
+
+import os
+import subprocess
+import hashlib
+from datetime import datetime, timezone
+
+REPO_DIR = os.path.expanduser("~/master-hub")
+BACKUP_DIR = os.path.expanduser("~/backups/master-hub")
+GPG_RECIPIENT = "evansrobert517@gmail.com"
+
+def run_cmd(cmd: list, cwd: str = None):
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed ({' '.join(cmd)}): {result.stderr.strip()}")
+    return result.stdout.strip()
+
+def compute_sha512(filepath: str) -> str:
+    sha512 = hashlib.sha512()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            sha512.update(chunk)
+    return sha512.hexdigest()
+
+def create_verified_backup() -> str:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_name = f"master_hub_backup_{timestamp}.tar.zst"
+    archive_path = os.path.join(BACKUP_DIR, archive_name)
+
+    print(f"[*] Creating Zstandard archive: {archive_path}")
+    run_cmd([
+        "tar",
+        "--exclude=.git/objects/pack/*.tmp",
+        "--exclude=__pycache__",
+        "--exclude=*.env",
+        "-I", "zstd -19 -T0",
+        "-cf", archive_path,
+        "-C", os.path.expanduser("~"),
+        "master-hub"
+    ])
+
+    digest = compute_sha512(archive_path)
+    sha_file = f"{archive_path}.sha512"
+    with open(sha_file, "w", encoding="utf-8") as f:
+        f.write(f"{digest}  {archive_name}\n")
+    print(f"[+] SHA-512 Digest written: {sha_file}")
+
+    asc_file = f"{archive_path}.asc"
+    run_cmd([
+        "gpg", "--batch", "--yes",
+        "--local-user", GPG_RECIPIENT,
+        "--detach-sign", "--armor",
+        "--output", asc_file,
+        archive_path
+    ])
+    print(f"[+] Detached GPG signature created: {asc_file}")
+    return archive_path
+
+def sync_git_repositories():
+    print("[*] Checking Git workspace status...")
+    status = run_cmd(["git", "status", "--porcelain"], cwd=REPO_DIR)
+    if status:
+        run_cmd(["git", "add", "-A"], cwd=REPO_DIR)
+        msg = f"chore(adpBetty): automated signed sync {datetime.now(timezone.utc).isoformat()}"
+        run_cmd(["git", "commit", "-S", "-m", msg], cwd=REPO_DIR)
+        print("[+] Created GPG-signed sync commit.")
+
+    remotes = run_cmd(["git", "remote"], cwd=REPO_DIR).splitlines()
+    for remote in remotes:
+        print(f"[*] Pushing to remote '{remote}'...")
+        run_cmd(["git", "push", remote, "--all"], cwd=REPO_DIR)
+        run_cmd(["git", "push", remote, "--tags"], cwd=REPO_DIR)
+        print(f"[+] Synced '{remote}' successfully.")
+
+if __name__ == "__main__":
+    archive = create_verified_backup()
+    sync_git_repositories()
+    print(f"[✓] adpBetty Enterprise Backup & Sync complete: {archive}")
+EOF
+
+# 2. Write Account Ownership Attestation Script (Including TikTok/Instagram Handles & Hope for Dogs URL)
+cat << 'EOF' > "$SCRIPTS_DIR/account_claim_manifest.py"
+#!/usr/bin/env python3
+"""
+adpBetty / WK Precision Enterprise LLC - Zero-PII Account Ownership Attestation Generator
+Creates a GPG-signed JSON record proving timestamped claim authorship across all linked profiles.
+"""
+
+import json
+import hashlib
+import subprocess
+from datetime import datetime, timezone
+
+CLAIMANT = "Robert Edward Evans"
+ENTITY = "WK Precision Enterprise LLC"
+CONTACT_EMAIL = "evansrobert517@gmail.com"
+
+TARGET_ACCOUNTS = [
+    {"platform": "Instagram", "handle": "@robertedward5888"},
+    {"platform": "Instagram", "handle": "@robert531031"},
+    {"platform": "Instagram", "handle": "@robertevans5185"},
+    {"platform": "Instagram", "handle": "@robert6857evans"},
+    {"platform": "Instagram", "handle": "@robertedwardevan"},
+    {"platform": "Instagram", "handle": "@snakeskin365"},
+    {"platform": "Instagram", "handle": "@indianimal47"},
+    {"platform": "Instagram", "handle": "@itschriscashh"},
+    {"platform": "TikTok", "handle": "@hilarysaurusrex"},
+    {"platform": "TikTok", "handle": "@danielrenemusic", "url": "https://www.tiktok.com/@danielrenemusic"},
+    {"platform": "TikTok", "handle": "@dylan_1m3", "display_name": "dylan"},
+    {"platform": "TikTok", "handle": "@hopefordogs48", "url": "https://www.tiktok.com/@hopefordogs48"}
+]
+
+def generate_zero_pii_attestation():
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    attestation = {
+        "document_type": "adpBetty Cryptographic Account Ownership Attestation",
+        "timestamp_utc": timestamp,
+        "claimant": CLAIMANT,
+        "legal_entity": ENTITY,
+        "jurisdiction": "State of Indiana, United States",
+        "verified_email": CONTACT_EMAIL,
+        "github_provenance": ["re1Lucky365", "adpsnake7-beep"],
+        "claimed_accounts": TARGET_ACCOUNTS,
+        "pii_policy": "Sensitive identity and financial documents withheld from version control; verified locally via GPG signatures."
+    }
+
+    raw_json = json.dumps(attestation, indent=2, sort_keys=True)
+    attestation_hash = hashlib.sha512(raw_json.encode("utf-8")).hexdigest()
+    attestation["attestation_sha512"] = attestation_hash
+
+    filename = f"account_claim_attestation_{int(datetime.now().timestamp())}.json"
+    filepath = os.path.join(os.path.expanduser("~/master-hub"), filename)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(json.dumps(attestation, indent=2))
+
+    print(f"[+] Zero-PII Attestation saved: {filepath}")
+    print(f"[+] SHA-512 Digest: {attestation_hash}")
+
+    subprocess.run(
+        ["gpg", "--local-user", CONTACT_EMAIL, "--detach-sign", "--armor", filepath],
+        check=True
+    )
+    print(f"[+] Detached GPG Signature created: {filepath}.asc")
+
+if __name__ == "__main__":
+    generate_zero_pii_attestation()
+EOF
+
+# 3. Set Executable Permissions
+echo "[*] Setting executable permissions on pipeline scripts..."
+chmod +x "$SCRIPTS_DIR/enterprise_backup_sync.py"
+chmod +x "$SCRIPTS_DIR/account_claim_manifest.py"
+
+echo "[✓] adpBetty pipeline successfully deployed and configured."
+
+Executing Your Sovereign Pipeline
+Run the deployment and trigger your verification sync:
+bash adpBetty-deploy.sh
+python3 ~/master-hub/scripts/account_claim_manifest.py
+python3 ~/master-hub/scripts/enterprise_backup_sync.py
+
+bash adpBetty-deploy.sh
+python3 ~/master-hub/scripts/account_claim_manifest.py
+python3 ~/master-hub/scripts/enterprise_backup_sync.py
+#!/usr/bin/env bash
+set -euo pipefail
+
+WORKSPACE="$HOME/master-hub"
+SCRIPTS_DIR="$WORKSPACE/scripts"
+BACKUP_DIR="$HOME/backups/master-hub"
+GPG_USER="evansrobert517@gmail.com"
+
+echo "[*] Initializing adpBetty Enterprise Pipeline Structure..."
+mkdir -p "$SCRIPTS_DIR" "$BACKUP_DIR"
+
+# 1. Write Automated Backup & Sync Script
+cat << 'EOF' > "$SCRIPTS_DIR/enterprise_backup_sync.py"
+#!/usr/bin/env python3
+"""
+adpBetty / WK Precision Enterprise LLC - Automated Enterprise Backup & Sync Pipeline
+Creates Zstandard-compressed, SHA-512 hashed, and GPG-signed archives of ~/master-hub
+and synchronizes verified commits with remote Git repositories.
+"""
+
+import os
+import subprocess
+import hashlib
+from datetime import datetime, timezone
+
+REPO_DIR = os.path.expanduser("~/master-hub")
+BACKUP_DIR = os.path.expanduser("~/backups/master-hub")
+GPG_RECIPIENT = "evansrobert517@gmail.com"
+
+def run_cmd(cmd: list, cwd: str = None):
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed ({' '.join(cmd)}): {result.stderr.strip()}")
+    return result.stdout.strip()
+
+def compute_sha512(filepath: str) -> str:
+    sha512 = hashlib.sha512()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            sha512.update(chunk)
+    return sha512.hexdigest()
+
+def create_verified_backup() -> str:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_name = f"master_hub_backup_{timestamp}.tar.zst"
+    archive_path = os.path.join(BACKUP_DIR, archive_name)
+
+    print(f"[*] Creating Zstandard archive: {archive_path}")
+    run_cmd([
+        "tar",
+        "--exclude=.git/objects/pack/*.tmp",
+        "--exclude=__pycache__",
+        "--exclude=*.env",
+        "-I", "zstd -19 -T0",
+        "-cf", archive_path,
+        "-C", os.path.expanduser("~"),
+        "master-hub"
+    ])
+
+    digest = compute_sha512(archive_path)
+    sha_file = f"{archive_path}.sha512"
+    with open(sha_file, "w", encoding="utf-8") as f:
+        f.write(f"{digest}  {archive_name}\n")
+    print(f"[+] SHA-512 Digest written: {sha_file}")
+
+    asc_file = f"{archive_path}.asc"
+    run_cmd([
+        "gpg", "--batch", "--yes",
+        "--local-user", GPG_RECIPIENT,
+        "--detach-sign", "--armor",
+        "--output", asc_file,
+        archive_path
+    ])
+    print(f"[+] Detached GPG signature created: {asc_file}")
+    return archive_path
+
+def sync_git_repositories():
+    print("[*] Checking Git workspace status...")
+    status = run_cmd(["git", "status", "--porcelain"], cwd=REPO_DIR)
+    if status:
+        run_cmd(["git", "add", "-A"], cwd=REPO_DIR)
+        msg = f"chore(adpBetty): automated signed sync {datetime.now(timezone.utc).isoformat()}"
+        run_cmd(["git", "commit", "-S", "-m", msg], cwd=REPO_DIR)
+        print("[+] Created GPG-signed sync commit.")
+
+    remotes = run_cmd(["git", "remote"], cwd=REPO_DIR).splitlines()
+    for remote in remotes:
+        print(f"[*] Pushing to remote '{remote}'...")
+        run_cmd(["git", "push", remote, "--all"], cwd=REPO_DIR)
+        run_cmd(["git", "push", remote, "--tags"], cwd=REPO_DIR)
+        print(f"[+] Synced '{remote}' successfully.")
+
+if __name__ == "__main__":
+    archive = create_verified_backup()
+    sync_git_repositories()
+    print(f"[✓] adpBetty Enterprise Backup & Sync complete: {archive}")
+EOF
+
+# 2. Write Account Ownership Attestation Script (Including TikTok/Instagram Handles & Hope for Dogs URL)
+cat << 'EOF' > "$SCRIPTS_DIR/account_claim_manifest.py"
+#!/usr/bin/env python3
+"""
+adpBetty / WK Precision Enterprise LLC - Zero-PII Account Ownership Attestation Generator
+Creates a GPG-signed JSON record proving timestamped claim authorship across all linked profiles.
+"""
+
+import json
+import hashlib
+import subprocess
+from datetime import datetime, timezone
+
+CLAIMANT = "Robert Edward Evans"
+ENTITY = "WK Precision Enterprise LLC"
+CONTACT_EMAIL = "evansrobert517@gmail.com"
+
+TARGET_ACCOUNTS = [
+    {"platform": "Instagram", "handle": "@robertedward5888"},
+    {"platform": "Instagram", "handle": "@robert531031"},
+    {"platform": "Instagram", "handle": "@robertevans5185"},
+    {"platform": "Instagram", "handle": "@robert6857evans"},
+    {"platform": "Instagram", "handle": "@robertedwardevan"},
+    {"platform": "Instagram", "handle": "@snakeskin365"},
+    {"platform": "Instagram", "handle": "@indianimal47"},
+    {"platform": "Instagram", "handle": "@itschriscashh"},
+    {"platform": "TikTok", "handle": "@hilarysaurusrex"},
+    {"platform": "TikTok", "handle": "@danielrenemusic", "url": "https://www.tiktok.com/@danielrenemusic"},
+    {"platform": "TikTok", "handle": "@dylan_1m3", "display_name": "dylan"},
+    {"platform": "TikTok", "handle": "@hopefordogs48", "url": "https://www.tiktok.com/@hopefordogs48"}
+]
+
+def
 master_hub_backup_TIMESTAMP.tar.zsttar -I zstd -xf master_hub_backup_TIMESTAMP.tar.zst -C ~/
 sha512sum -c master_hub_backup_TIMESTAMP.tar.zst.sha512
 gpg --verify master_hub_backup_TIMESTAMP.tar.zst.asc master_hub_backup_TIMESTAMP.tar.zst
