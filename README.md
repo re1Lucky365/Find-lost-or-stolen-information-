@@ -1,3 +1,244 @@
+# HELP system_cpu_usage Historical CPU usage percentage
+# TYPE system_cpu_usage gauge
+system_cpu_usage{host="server-01"} 45.2 1577836800000
+system_cpu_usage{host="server-01"} 48.7 1577836860000
+Mkdir -p monitoring/prometheus monitoring/grafana/provisioning/datasources
+cd monitoring
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+version: '3.8'
+
+networks:
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - monitoring-net
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/host/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring-net
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=ChangeMeSecurely123!
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - monitoring-net
+docker compose up -d
+Track everything for the last 4000 years. "
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=4000y'
+    networks:
+      - monitoring-net
+docker compose up -d
+docker exec -it prometheus promtool tsdb create-blocks-from openmetrics /path/to/history.om /prometheus
+history.om
+
+history.om
+# HELP system_cpu_usage Historical CPU usage percentage
+# TYPE system_cpu_usage gauge
+system_cpu_usage{host="server-01"} 45.2 1577836800000
+system_cpu_usage{host="server-01"} 48.7 1577836860000
+Mkdir -p monitoring/prometheus monitoring/grafana/provisioning/datasources
+cd monitoring
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+version: '3.8'
+
+networks:
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - monitoring-net
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/host/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring-net
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=ChangeMeSecurely123!
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - monitoring-net
+docker compose up -d
+Track everything for the last 40docker exec -it prometheus promtool tsdb create-blocks-from openmetrics /path/to/history.om /prometheus
+00 years. "
+How do I format a CSV or dataset into OpenMetrics format to backfill into Prometheus with promtool?
+# HELP system_cpu_usage Historical CPU usage percentage
+# TYPE system_cpu_usage gauge
+system_cpu_usage{host="server-01"} 45.2 1577836800000
+system_cpu_usage{host="server-01"} 48.7 1577836860000
+import csv
+from datetime import datetime
+
+input_csv = "data.csv"
+output_om = "history.om"
+
+with open(input_csv, mode="r", encoding="utf-8") as csv_file, \
+     open(output_om, mode="w", encoding="utf-8") as om_file:
+    
+    reader = csv.DictReader(csv_file)
+    
+    # Write metadata headers (adjust metric name as needed)
+    om_file.write("# HELP historical_metric Imported historical dataset\n")
+    om_file.write("# TYPE historical_metric gauge\n")
+    
+    for row in reader:
+        # Parse timestamp (supports ISO strings or epoch floats)
+        ts_raw = row["timestamp"]
+        try:
+            # Try parsing as float epoch seconds first
+            dt = datetime.fromtimestamp(float(ts_raw))
+        except ValueError:
+            # Fallback to ISO format string
+            dt = datetime.fromisoformat(ts_raw)
+            
+        # Convert to milliseconds integer
+        timestamp_ms = int(dt.timestamp() * 1000)
+        
+        metric_name = row.get("metric_name", "historical_metric")
+        value = float(row["value"])
+        
+        # Optional: Extract custom labels if present in CSV
+        host = row.get("host", "default-host")
+        
+        # Format OpenMetrics line
+        line = f'{metric_name}{{host="{host}"}} {value} {timestamp_ms}\n'
+        om_file.write(line)
+
+print(f"Successfully converted {input_csv} to {output_om}")
+docker run --rm -v $(pwd):/data prom/prometheus:latest \
+  promtool tsdb create-blocks-from openmetrics /data/history.om /data/output_blocks
+docker compose stop prometheus
+docker compose up -d prometheus
+
+
 account-reclamation-vault/
 ├── .github/
 │   └── workflows/
